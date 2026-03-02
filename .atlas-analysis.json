@@ -1,0 +1,116 @@
+{
+  "projectType": "framework",
+  "projectName": "Clean Architecture for iOS",
+  "projectDescription": "A practical implementation of Clean Architecture principles in SwiftUI with clear separation of concerns, testability, and maintainability.",
+  "theme": "palm",
+  "primaryColor": "#007AFF",
+  "lightColor": "#5AC8FA",
+  "darkColor": "#0A84FF",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Architecture",
+            "pages": [
+              "architecture/overview",
+              "architecture/layers",
+              "architecture/dependency-rule",
+              "architecture/solid-principles"
+            ]
+          },
+          {
+            "group": "Core Layers",
+            "pages": [
+              "layers/domain",
+              "layers/data",
+              "layers/presentation",
+              "layers/application"
+            ]
+          },
+          {
+            "group": "Advanced Concepts",
+            "pages": [
+              "advanced/navigation",
+              "advanced/dependency-injection",
+              "advanced/testing",
+              "advanced/module-structure"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Domain Layer",
+            "pages": [
+              "api/domain/entities",
+              "api/domain/use-cases",
+              "api/domain/repository-contracts"
+            ]
+          },
+          {
+            "group": "Data Layer",
+            "pages": [
+              "api/data/repositories",
+              "api/data/data-sources",
+              "api/data/session-management"
+            ]
+          },
+          {
+            "group": "Presentation Layer",
+            "pages": [
+              "api/presentation/viewmodels",
+              "api/presentation/views",
+              "api/presentation/feature-di"
+            ]
+          },
+          {
+            "group": "Application Layer",
+            "pages": [
+              "api/application/injector",
+              "api/application/navigator"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Clean Architecture with unidirectional dependencies",
+    "SOLID principles throughout the codebase",
+    "Protocol-based dependency injection",
+    "Type-safe navigation system",
+    "Modular Swift Package Manager architecture",
+    "MVVM presentation pattern with SwiftUI",
+    "Comprehensive testing strategy with layer isolation",
+    "Framework-agnostic domain layer"
+  ],
+  "publicApiSurface": [
+    "UserLoginUseCase",
+    "UserIsLoggedInUseCase",
+    "ObserveUserIsLoggedInUseCase",
+    "UserRepository",
+    "User (Entity)",
+    "LoginError",
+    "DefaultUserRepository",
+    "AuthClient",
+    "UserSession",
+    "UserDI",
+    "LoginUIDI",
+    "HomeUIDI",
+    "WishlistUIDI",
+    "CartUIDI",
+    "Navigator",
+    "Injector"
+  ]
+}

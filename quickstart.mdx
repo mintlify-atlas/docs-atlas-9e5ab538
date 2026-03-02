@@ -1,80 +1,273 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart
+description: Get started with the iOS Clean Architecture framework in minutes
 ---
 
-## Get started in three steps
+This guide will help you explore the iOS Clean Architecture example project and understand its structure.
 
-Get your documentation site running locally and make your first customization.
+## Prerequisites
 
-### Step 1: Set up your local environment
+Before you begin, ensure you have:
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
+- **Xcode 16+** installed (required for Swift 6.2)
+- **macOS** with iOS 18+ SDK
+- Basic understanding of **SwiftUI** and **iOS development**
+
+## Getting started
+
+<Steps>
+  <Step title="Clone the repository">
+    Clone the project from GitHub:
     
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
+    ```bash
+    git clone https://github.com/joshgallantt/Real-Clean-Architecture-in-iOS-Example.git
+    cd Real-Clean-Architecture-in-iOS-Example
+    ```
+  </Step>
+  
+  <Step title="Open in Xcode">
+    Open the Xcode project:
     
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 2: Deploy your changes
-
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
+    ```bash
+    open CleanArchitecture.xcodeproj
+    ```
     
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
+    Or double-click `CleanArchitecture.xcodeproj` in Finder.
+  </Step>
+  
+  <Step title="Build and run">
+    1. Select the **iPhone** scheme from the scheme selector
+    2. Choose a simulator (iPhone 16 Pro recommended)
+    3. Press **⌘ + R** to build and run
+    
+    The app will launch showing a login screen.
+  </Step>
+  
+  <Step title="Explore the app">
+    The example app demonstrates a simple e-commerce flow:
+    
+    - **Login screen** - Enter any username/password (uses fake auth)
+    - **Home tab** - Browse items with detail navigation
+    - **Wishlist tab** - View wishlist items
+    - **Cart tab** - Manage shopping cart
+    
+    Each feature demonstrates Clean Architecture principles in action.
+  </Step>
+</Steps>
+
+## Project structure
+
+The project is organized into Swift Package Manager modules, each with a specific responsibility:
+
+<CodeGroup>
+```swift User Module
+User/
+├── Package.swift
+├── Sources/
+│   ├── Domain/           # Pure business logic
+│   │   ├── Model/        # Entities (User, LoginError)
+│   │   ├── UseCases/     # Use cases
+│   │   └── Repository/   # Repository contracts
+│   ├── Data/             # Data layer
+│   │   ├── Auth/         # AuthClient protocol
+│   │   ├── Session/      # UserSession
+│   │   └── DefaultUserRepository.swift
+│   └── DI/
+│       └── UserDI.swift  # Dependency injection
+└── Tests/
+```
+
+```swift Feature UI Module
+LoginUI/
+├── Package.swift
+├── Sources/
+│   ├── UI/
+│   │   └── LoginScreen/
+│   │       ├── LoginScreenView.swift
+│   │       └── LoginScreenViewModel.swift
+│   └── DI/
+│       └── LoginUIDI.swift
+└── Tests/
+```
+
+```swift Application Layer
+iPhone/
+├── Injector.swift        # Composition root
+├── Main/
+│   ├── Main.swift        # App entry point
+│   └── TabScreen.swift
+└── Navigation/
+    ├── Navigator.swift   # Navigation coordinator
+    └── Destination.swift # Route definitions
+```
+</CodeGroup>
+
+## Understanding the layers
+
+The project implements Clean Architecture with four distinct layers:
+
+<CardGroup cols={2}>
+  <Card title="Domain layer" icon="cube" href="/layers/domain">
+    Pure business logic with no framework dependencies
+  </Card>
+  
+  <Card title="Data layer" icon="database" href="/layers/data">
+    Repository implementations and data sources
+  </Card>
+  
+  <Card title="Presentation layer" icon="window" href="/layers/presentation">
+    ViewModels and SwiftUI views using MVVM pattern
+  </Card>
+  
+  <Card title="Application layer" icon="diagram-project" href="/layers/application">
+    Dependency injection and app composition
+  </Card>
+</CardGroup>
+
+## Tracing a login flow
+
+Let's trace what happens when a user logs in to understand how the layers work together:
+
+<Steps>
+  <Step title="User enters credentials">
+    User types username/password in `LoginScreenView` and taps the login button:
+    
+    ```swift LoginUI/Sources/UI/LoginScreen/LoginScreenView.swift
+    Button("Login") {
+        Task {
+            await viewModel.login()
+        }
+    }
+    ```
+  </Step>
+  
+  <Step title="ViewModel processes action">
+    `LoginScreenViewModel` handles the action and calls the use case:
+    
+    ```swift LoginUI/Sources/UI/LoginScreen/LoginScreenViewModel.swift
+    func login() async {
+        isLoading = true
+        let result = await userLogin.execute(
+            username: username, 
+            password: password
+        )
+        // Handle result...
+    }
+    ```
+  </Step>
+  
+  <Step title="Use case validates input">
+    `UserLoginUseCase` validates the input and delegates to the repository:
+    
+    ```swift User/Sources/Domain/UseCases/UserLoginUseCase.swift
+    public func execute(username: String, password: String) async -> Result<Void, LoginError> {
+        if username.isEmpty {
+            return .failure(.usernameIsEmpty)
+        }
+        if password.isEmpty {
+            return .failure(.passwordIsEmpty)
+        }
+        return await userRepository.login(username: username, password: password)
+    }
+    ```
+  </Step>
+  
+  <Step title="Repository coordinates data">
+    `DefaultUserRepository` calls the auth client and manages the session:
+    
+    ```swift User/Sources/Data/DefaultUserRepository.swift
+    public func login(username: String, password: String) async -> Result<Void, LoginError> {
+        let result = await authClient.login(username: username, password: password)
+        switch result {
+        case .success(let (user, token)):
+            session.setUser(user, token: token)
+            return .success(())
+        case .failure(let error):
+            return .failure(error.toLoginError())
+        }
+    }
+    ```
+  </Step>
+  
+  <Step title="Data source performs authentication">
+    `FakeAuthClient` simulates authentication (in a real app, this would call an API):
+    
+    ```swift User/Sources/Data/Auth/FakeAuthClient.swift
+    actor FakeAuthClient: AuthClient {
+        func login(username: String, password: String) async -> Result<(User, AuthToken), AuthClientError> {
+            // Simulate network delay
+            try? await Task.sleep(for: .seconds(1))
+            
+            // Create fake user and token
+            let user = User(id: UUID(), username: username)
+            let token = AuthToken(token: "fake-jwt-token", expiresAt: Date().addingTimeInterval(3600))
+            
+            return .success((user, token))
+        }
+    }
+    ```
+  </Step>
+</Steps>
+
+<Note>
+  Notice how each layer has a single responsibility and dependencies flow inward. The domain layer (use case) doesn't know about SwiftUI or network calls.
+</Note>
+
+## Exploring the codebase
+
+<Accordion title="Start with the domain layer">
+  Open `User/Sources/Domain/` to see the core business logic:
+  
+  - **Entities**: `User.swift`, `LoginError.swift`
+  - **Use cases**: `UserLoginUseCase.swift`, `UserIsLoggedInUseCase.swift`
+  - **Contracts**: `UserRepository.swift`
+  
+  These files have zero dependencies on frameworks or UI code.
 </Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+<Accordion title="Examine the data layer">
+  Open `User/Sources/Data/` to see how data is accessed:
+  
+  - **Repository**: `DefaultUserRepository.swift` implements the domain contract
+  - **Data sources**: `AuthClient.swift`, `UserSession.swift`
+  - **DTOs**: `AuthToken.swift`
+</Accordion>
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+<Accordion title="Study the presentation layer">
+  Open `LoginUI/Sources/UI/LoginScreen/` to see the MVVM pattern:
+  
+  - **ViewModel**: `LoginScreenViewModel.swift` manages state and coordinates with use cases
+  - **View**: `LoginScreenView.swift` is a pure SwiftUI view
+</Accordion>
 
-### Step 3: Go live
-
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
+<Accordion title="Understand dependency injection">
+  Open the application layer to see how everything is wired:
+  
+  - **Injector**: `iPhone/Injector.swift` - composition root that creates all dependencies
+  - **UserDI**: `User/Sources/DI/UserDI.swift` - creates domain-level dependencies
+  - **LoginUIDI**: `LoginUI/Sources/DI/LoginUIDI.swift` - creates UI-level dependencies
 </Accordion>
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Learn the architecture" icon="diagram-project" href="/architecture/overview">
+    Understand Clean Architecture principles and the dependency rule
+  </Card>
+  
+  <Card title="Explore layers" icon="layer-group" href="/layers/domain">
+    Deep dive into each layer's responsibilities and implementation
+  </Card>
+  
+  <Card title="Study navigation" icon="route" href="/advanced/navigation">
+    Learn the type-safe navigation system with protocols and destinations
+  </Card>
+  
+  <Card title="Testing strategy" icon="flask" href="/advanced/testing">
+    Discover how to test each layer in isolation
+  </Card>
 </CardGroup>
 
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>
+<Tip>
+  Try modifying the login flow to add a new validation rule. Start in the domain layer (`UserLoginUseCase`) and work outward to the presentation layer.
+</Tip>

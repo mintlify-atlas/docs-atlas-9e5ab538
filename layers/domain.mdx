@@ -1,0 +1,260 @@
+---
+title: Domain layer
+description: Core business logic with entities, use cases, and repository contracts that are framework-independent
+---
+
+The Domain layer represents the core business logic of your application. It contains entities, use cases, and repository contracts, and is completely independent of any framework or external dependencies.
+
+## Architecture overview
+
+The Domain layer sits at the center of the Clean Architecture model and defines:
+
+- **Entities**: Business models representing core concepts
+- **Use Cases**: Application-specific business rules
+- **Repository Protocols**: Contracts for data access without implementation details
+
+<Note>
+The Domain layer should have no dependencies on other layers. It defines contracts that outer layers implement.
+</Note>
+
+## Entities
+
+Entities are simple data structures that represent your core business concepts. They should be framework-independent and focus solely on business logic.
+
+### Example: User entity
+
+The `User` entity represents a user in the system:
+
+```swift User/Sources/Domain/Model/User.swift
+public struct User: Equatable, Sendable {
+    public let id: UUID
+    public let username: String
+
+    public init(id: UUID, username: String) {
+        self.id = id
+        self.username = username
+    }
+}
+```
+<CodeGroup>
+```swift User entity
+public struct User: Equatable, Sendable {
+    public let id: UUID
+    public let username: String
+}
+```
+
+```swift Error types
+public enum LoginError: Error {
+    case invalidCredentials
+    case usernameIsEmpty
+    case passwordIsEmpty
+    case unknown
+}
+```
+</CodeGroup>
+
+### Key characteristics
+
+- Pure Swift types with no UIKit or SwiftUI dependencies
+- Conform to `Equatable` and `Sendable` for value semantics
+- Immutable by default using `let` properties
+- Domain-specific error types for business rule violations
+
+## Repository protocols
+
+Repository protocols define contracts for data access without specifying implementation details. This allows the Domain layer to remain independent of data sources.
+
+```swift User/Sources/Domain/Repository/UserRepository.swift
+import Combine
+
+public protocol UserRepository {
+    @MainActor
+    var loggedInPublisher: AnyPublisher<Bool, Never> { get }
+    
+    @MainActor
+    func login(username: String, password: String) async -> Result<Void, LoginError>
+    
+    @MainActor
+    func logout() async
+}
+```
+
+<Steps>
+  <Step title="Define the contract">
+    Create a protocol that describes what data operations are needed, not how they're implemented.
+  </Step>
+  
+  <Step title="Use domain types">
+    Accept and return only domain entities and errors, never DTOs or framework types.
+  </Step>
+  
+  <Step title="Remain agnostic">
+    Don't specify whether data comes from network, database, or cache - that's the Data layer's concern.
+  </Step>
+</Steps>
+
+## Use cases
+
+Use cases encapsulate application-specific business rules. Each use case represents a single action a user can perform.
+
+### Protocol-based design
+
+Define use cases as protocols to enable testing and dependency injection:
+
+```swift User/Sources/Domain/UseCases/UserLoginUseCase.swift:8-11
+public protocol UserLoginUseCase {
+    @MainActor
+    func execute(username: String, password: String) async -> Result<Void, LoginError>
+}
+```
+
+### Default implementation
+
+Provide a concrete implementation that enforces business rules:
+
+```swift User/Sources/Domain/UseCases/UserLoginUseCase.swift:13-30
+public struct DefaultUserLoginUseCase: UserLoginUseCase {
+    let userRepository: UserRepository
+
+    public init(userRepository: UserRepository) {
+        self.userRepository = userRepository
+    }
+
+    @MainActor
+    public func execute(username: String, password: String) async -> Result<Void, LoginError> {
+        if username.isEmpty {
+            return .failure(.usernameIsEmpty)
+        }
+        if password.isEmpty {
+            return .failure(.passwordIsEmpty)
+        }
+        return await userRepository.login(username: username, password: password)
+    }
+}
+```
+
+### Use case patterns
+
+<Tabs>
+  <Tab title="Single action">
+    Each use case performs one specific action with a clear purpose.
+    
+    ```swift
+    public protocol UserLoginUseCase {
+        func execute(username: String, password: String) async -> Result<Void, LoginError>
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Query pattern">
+    Use cases can query state without side effects.
+    
+    ```swift
+    public protocol UserIsLoggedInUseCase {
+        @MainActor
+        func execute() async -> Bool
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Observable pattern">
+    Use cases can expose reactive streams using Combine.
+    
+    ```swift
+    public protocol ObserveUserIsLoggedInUseCase {
+        @MainActor
+        var publisher: AnyPublisher<Bool, Never> { get }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Business rules validation
+
+Use cases are the ideal place to enforce business rules before delegating to repositories:
+
+<CodeGroup>
+```swift Input validation
+if username.isEmpty {
+    return .failure(.usernameIsEmpty)
+}
+if password.isEmpty {
+    return .failure(.passwordIsEmpty)
+}
+```
+
+```swift Business logic
+// Use case coordinates multiple repositories
+let userResult = await userRepository.findUser(id: userId)
+let permissionResult = await permissionRepository.hasAccess(userId)
+
+if case .success(let hasAccess) = permissionResult, hasAccess {
+    return userResult
+}
+return .failure(.unauthorized)
+```
+</CodeGroup>
+
+## Benefits
+
+<CardGroup cols={2}>
+  <Card title="Framework independence" icon="cube">
+    No dependencies on UIKit, SwiftUI, or any framework
+  </Card>
+  
+  <Card title="Testability" icon="flask">
+    Easy to unit test with mocked repositories
+  </Card>
+  
+  <Card title="Reusability" icon="recycle">
+    Same domain logic works across iOS, macOS, and other platforms
+  </Card>
+  
+  <Card title="Clear contracts" icon="file-contract">
+    Protocols define clear boundaries between layers
+  </Card>
+</CardGroup>
+
+## Testing example
+
+The protocol-based design makes testing straightforward:
+
+```swift
+class MockUserRepository: UserRepository {
+    var loginResult: Result<Void, LoginError> = .success(())
+    
+    func login(username: String, password: String) async -> Result<Void, LoginError> {
+        return loginResult
+    }
+}
+
+@Test func testLoginWithEmptyUsername() async {
+    let mockRepo = MockUserRepository()
+    let useCase = DefaultUserLoginUseCase(userRepository: mockRepo)
+    
+    let result = await useCase.execute(username: "", password: "test")
+    
+    #expect(result == .failure(.usernameIsEmpty))
+}
+```
+
+## Best practices
+
+<AccordionGroup>
+  <Accordion title="Keep entities simple">
+    Entities should be plain data structures. Avoid adding methods that depend on external services.
+  </Accordion>
+  
+  <Accordion title="One use case, one responsibility">
+    Each use case should do one thing well. Don't create god use cases that handle multiple actions.
+  </Accordion>
+  
+  <Accordion title="Use Result types">
+    Return `Result<Success, Error>` from use cases to make error handling explicit and type-safe.
+  </Accordion>
+  
+  <Accordion title="Async/await for asynchronous operations">
+    Use modern Swift concurrency with `async`/`await` for cleaner asynchronous code.
+  </Accordion>
+</AccordionGroup>

@@ -1,0 +1,192 @@
+---
+title: Domain use cases
+description: Business logic use cases for user authentication and session management
+---
+
+## UserLoginUseCase
+
+Handles user authentication with validation.
+
+```swift
+public protocol UserLoginUseCase
+```
+
+### Methods
+
+#### execute
+
+Authenticates a user with the provided credentials.
+
+```swift
+@MainActor
+func execute(username: String, password: String) async -> Result<Void, LoginError>
+```
+
+<ParamField path="username" type="String" required>
+  The username to authenticate with
+</ParamField>
+
+<ParamField path="password" type="String" required>
+  The password to authenticate with
+</ParamField>
+
+**Returns:** `Result<Void, LoginError>` - Success if authentication succeeds, or a `LoginError` describing the failure
+
+### Default implementation
+
+The framework provides `DefaultUserLoginUseCase` which:
+- Validates that username is not empty (returns `.failure(.usernameIsEmpty)`)
+- Validates that password is not empty (returns `.failure(.passwordIsEmpty)`)
+- Delegates to `UserRepository.login` for authentication
+
+### Example
+
+```swift
+import Foundation
+
+// Initialize the use case
+let loginUseCase: UserLoginUseCase = DefaultUserLoginUseCase(
+    userRepository: userRepository
+)
+
+// Execute login
+let result = await loginUseCase.execute(
+    username: "john.doe",
+    password: "secretPassword123"
+)
+
+switch result {
+case .success:
+    print("User logged in successfully")
+    // Navigate to main screen
+    
+case .failure(let error):
+    switch error {
+    case .invalidCredentials:
+        print("Invalid username or password")
+    case .usernameIsEmpty:
+        print("Username is required")
+    case .passwordIsEmpty:
+        print("Password is required")
+    case .unknown:
+        print("Login failed")
+    }
+}
+```
+
+---
+
+## UserIsLoggedInUseCase
+
+Checks if a user is currently logged in.
+
+```swift
+public protocol UserIsLoggedInUseCase
+```
+
+### Methods
+
+#### execute
+
+Returns the current login status.
+
+```swift
+@MainActor
+func execute() async -> Bool
+```
+
+**Returns:** `Bool` - `true` if a user is logged in, `false` otherwise
+
+### Default implementation
+
+The framework provides `DefaultUserIsLoggedInUseCase` which retrieves the first value from `UserRepository.loggedInPublisher`.
+
+### Example
+
+```swift
+import Foundation
+
+// Initialize the use case
+let isLoggedInUseCase: UserIsLoggedInUseCase = DefaultUserIsLoggedInUseCase(
+    userRepository: userRepository
+)
+
+// Check login status
+let isLoggedIn = await isLoggedInUseCase.execute()
+
+if isLoggedIn {
+    print("User is logged in")
+    // Show main content
+} else {
+    print("User is not logged in")
+    // Show login screen
+}
+```
+
+---
+
+## ObserveUserIsLoggedInUseCase
+
+Observes changes to the user's login status over time.
+
+```swift
+public protocol ObserveUserIsLoggedInUseCase
+```
+
+### Methods
+
+#### execute
+
+Returns a publisher that emits the current login status and updates when it changes.
+
+```swift
+@MainActor
+func execute() -> AnyPublisher<Bool, Never>
+```
+
+**Returns:** `AnyPublisher<Bool, Never>` - A publisher that emits `true` when logged in, `false` when logged out
+
+### Default implementation
+
+The framework provides `DefaultObserveUserIsLoggedInUseCase` which returns `UserRepository.loggedInPublisher`.
+
+### Example
+
+```swift
+import Combine
+import Foundation
+
+// Initialize the use case
+let observeLoginUseCase: ObserveUserIsLoggedInUseCase = DefaultObserveUserIsLoggedInUseCase(
+    userRepository: userRepository
+)
+
+// Observe login status changes
+var cancellables = Set<AnyCancellable>()
+
+observeLoginUseCase.execute()
+    .sink { isLoggedIn in
+        if isLoggedIn {
+            print("User logged in")
+            // Update UI to show logged-in state
+        } else {
+            print("User logged out")
+            // Update UI to show logged-out state
+        }
+    }
+    .store(in: &cancellables)
+
+// In a SwiftUI view
+class LoginViewModel: ObservableObject {
+    @Published var isLoggedIn = false
+    private var cancellables = Set<AnyCancellable>()
+    private let observeLoginUseCase: ObserveUserIsLoggedInUseCase
+    
+    init(observeLoginUseCase: ObserveUserIsLoggedInUseCase) {
+        self.observeLoginUseCase = observeLoginUseCase
+        
+        observeLoginUseCase.execute()
+            .assign(to: &$isLoggedIn)
+    }
+}
+```

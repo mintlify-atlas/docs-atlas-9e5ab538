@@ -1,0 +1,238 @@
+---
+title: ViewModels
+description: ViewModel pattern implementation for managing UI state and business logic in the presentation layer
+---
+
+## Overview
+
+ViewModels in this architecture follow the MVVM pattern and serve as the presentation layer's business logic coordinator. They conform to SwiftUI's `ObservableObject` protocol and manage UI state through `@Published` properties.
+
+## Base pattern
+
+ViewModels are implemented as `final` classes that:
+
+- Inherit from `ObservableObject` for SwiftUI integration
+- Use `@Published` properties for reactive state updates
+- Depend on use cases from the domain layer
+- Are marked with `@MainActor` when they perform async operations
+- Contain UI-specific business logic and state transformation
+
+## LoginScreenViewModel
+
+Manages authentication state and user login flow.
+
+### Type signature
+
+```swift
+@MainActor
+public final class LoginScreenViewModel: ObservableObject {
+    public init(userLogin: UserLoginUseCase)
+}
+```
+
+### Properties
+
+<ParamField path="username" type="String">
+  Published property for username input. Bound to the UI text field.
+</ParamField>
+
+<ParamField path="password" type="String">
+  Published property for password input. Bound to the UI secure field.
+</ParamField>
+
+<ParamField path="isLoading" type="Bool">
+  Published property indicating async login operation status.
+</ParamField>
+
+<ParamField path="error" type="String?">
+  Published property containing user-facing error message when login fails.
+</ParamField>
+
+### Methods
+
+<ParamField path="login()" type="async -> Void">
+  Executes the login use case with current username and password. Updates `isLoading` and `error` states accordingly.
+</ParamField>
+
+### Usage example
+
+```swift
+import User
+
+@MainActor
+let viewModel = LoginScreenViewModel(
+    userLogin: userDI.userLoginUseCase
+)
+
+// In SwiftUI View
+TextField("Username", text: $viewModel.username)
+SecureField("Password", text: $viewModel.password)
+
+Button("Login") {
+    Task {
+        await viewModel.login()
+    }
+}
+
+if let error = viewModel.error {
+    Text(error).foregroundColor(.red)
+}
+```
+
+### Implementation details
+
+The ViewModel maps domain errors to user-friendly messages:
+
+```swift
+private func mapLoginErrorToMessage(_ error: LoginError) -> String {
+    switch error {
+    case .usernameIsEmpty:
+        return "Username is required."
+    case .passwordIsEmpty:
+        return "Password is required."
+    case .invalidCredentials:
+        return "Invalid username or password."
+    case .unknown:
+        return "An unknown error occurred. Please try again later."
+    }
+}
+```
+
+Location: `LoginUI/Sources/UI/LoginScreen/LoginScreenViewModel.swift:13`
+
+## HomeScreenViewModel
+
+Manages the home screen state and user interactions.
+
+### Type signature
+
+```swift
+public final class HomeScreenViewModel: ObservableObject {
+    public init()
+}
+```
+
+### Methods
+
+<ParamField path="didSelectHomeDetail(id:)" type="(UUID) -> Void">
+  Handles business logic when a home detail item is selected. Navigation is handled separately through the navigation protocol.
+</ParamField>
+
+<ParamField path="didSelectGoToWishlist(id:)" type="(UUID) -> Void">
+  Handles business logic when navigating to wishlist detail. Separation of concerns: ViewModel handles side effects, navigation protocol handles routing.
+</ParamField>
+
+### Usage example
+
+```swift
+let viewModel = HomeScreenViewModel()
+
+Button("Open Home Detail") {
+    let id = UUID()
+    viewModel.didSelectHomeDetail(id: id)
+    navigation.openHomeDetail(id: id)
+}
+```
+
+Location: `HomeUI/Sources/UI/HomeScreen/HomeScreenViewModel.swift:11`
+
+## CartScreenViewModel
+
+Manages the shopping cart screen state.
+
+### Type signature
+
+```swift
+public final class CartScreenViewModel: ObservableObject {
+    public init()
+}
+```
+
+### Methods
+
+<ParamField path="didSelectCartDetail(id:)" type="(UUID) -> Void">
+  Handles business logic when a cart item detail is selected.
+</ParamField>
+
+<ParamField path="didSelectGoToHomeDetail(id:)" type="(UUID) -> Void">
+  Handles business logic when navigating to home detail from cart.
+</ParamField>
+
+### Usage example
+
+```swift
+let viewModel = CartScreenViewModel()
+
+Button("Open Cart Detail") {
+    let id = UUID()
+    viewModel.didSelectCartDetail(id: id)
+    navigation.openCartDetail(id: id)
+}
+```
+
+Location: `CartUI/Sources/UI/CartScreen/CartScreenViewModel.swift:11`
+
+## WishlistScreenViewModel
+
+Manages the wishlist screen state and interactions.
+
+### Type signature
+
+```swift
+public final class WishlistScreenViewModel: ObservableObject {
+    public init()
+}
+```
+
+### Methods
+
+<ParamField path="didSelectWishlistItem(id:)" type="(UUID) -> Void">
+  Handles non-navigation side effects like analytics or state mutation when a wishlist item is selected.
+</ParamField>
+
+<ParamField path="didSelectGoToCart(id:)" type="(UUID) -> Void">
+  Handles business logic when navigating to cart from wishlist.
+</ParamField>
+
+### Usage example
+
+```swift
+let viewModel = WishlistScreenViewModel()
+
+Button("Open Wishlist Detail") {
+    let id = UUID()
+    viewModel.didSelectWishlistItem(id: id)
+    navigation.openWishlistDetail(id: id)
+}
+```
+
+Location: `WishlistUI/Sources/UI/WishlistScreen/WishlistScreenViewModel.swift:12`
+
+## Architecture principles
+
+### Separation of concerns
+
+ViewModels handle business logic and state management, while navigation is delegated to navigation protocols. This allows ViewModels to be testable without navigation dependencies.
+
+### Dependency injection
+
+ViewModels receive dependencies through constructor injection, typically use cases from the domain layer:
+
+```swift
+public init(userLogin: UserLoginUseCase) {
+    self.userLogin = userLogin
+}
+```
+
+### MainActor
+
+ViewModels that perform async operations are marked with `@MainActor` to ensure UI updates happen on the main thread:
+
+```swift
+@MainActor
+public final class LoginScreenViewModel: ObservableObject {
+    func login() async {
+        // Safe to update @Published properties
+    }
+}
+```

@@ -1,0 +1,146 @@
+---
+title: Repository contracts
+description: Protocol definitions for data layer abstractions in the domain layer
+---
+
+## UserRepository
+
+Defines the contract for user authentication and session management. This protocol is defined in the domain layer and implemented in the data layer following the Dependency Inversion Principle.
+
+```swift
+public protocol UserRepository
+```
+
+### Properties
+
+#### loggedInPublisher
+
+A publisher that emits the current login status and updates when it changes.
+
+```swift
+@MainActor
+var loggedInPublisher: AnyPublisher<Bool, Never> { get }
+```
+
+**Type:** `AnyPublisher<Bool, Never>`
+
+**Description:** Emits `true` when a user is logged in, `false` when logged out. Never fails.
+
+### Methods
+
+#### login
+
+Authenticates a user with the provided credentials.
+
+```swift
+@MainActor
+func login(username: String, password: String) async -> Result<Void, LoginError>
+```
+
+<ParamField path="username" type="String" required>
+  The username to authenticate with
+</ParamField>
+
+<ParamField path="password" type="String" required>
+  The password to authenticate with
+</ParamField>
+
+**Returns:** `Result<Void, LoginError>` - Success if authentication succeeds, or a `LoginError` describing the failure
+
+#### logout
+
+Logs out the current user.
+
+```swift
+@MainActor
+func logout() async
+```
+
+**Description:** Ends the current user session. After calling this method, `loggedInPublisher` should emit `false`.
+
+### Implementation example
+
+```swift
+import Combine
+import Foundation
+
+class DefaultUserRepository: UserRepository {
+    private let loggedInSubject = CurrentValueSubject<Bool, Never>(false)
+    private let apiClient: APIClient
+    private let sessionStore: SessionStore
+    
+    var loggedInPublisher: AnyPublisher<Bool, Never> {
+        loggedInSubject.eraseToAnyPublisher()
+    }
+    
+    init(apiClient: APIClient, sessionStore: SessionStore) {
+        self.apiClient = apiClient
+        self.sessionStore = sessionStore
+        
+        // Initialize with stored session state
+        loggedInSubject.send(sessionStore.hasValidSession())
+    }
+    
+    @MainActor
+    func login(username: String, password: String) async -> Result<Void, LoginError> {
+        do {
+            let response = try await apiClient.authenticate(
+                username: username,
+                password: password
+            )
+            
+            // Store session
+            sessionStore.saveSession(response.token)
+            loggedInSubject.send(true)
+            
+            return .success(())
+        } catch let error as APIError {
+            switch error {
+            case .unauthorized:
+                return .failure(.invalidCredentials)
+            default:
+                return .failure(.unknown)
+            }
+        } catch {
+            return .failure(.unknown)
+        }
+    }
+    
+    @MainActor
+    func logout() async {
+        sessionStore.clearSession()
+        loggedInSubject.send(false)
+    }
+}
+```
+
+### Usage with use cases
+
+```swift
+import Foundation
+
+// Set up repository
+let userRepository: UserRepository = DefaultUserRepository(
+    apiClient: apiClient,
+    sessionStore: sessionStore
+)
+
+// Initialize use cases with the repository
+let loginUseCase = DefaultUserLoginUseCase(
+    userRepository: userRepository
+)
+
+let isLoggedInUseCase = DefaultUserIsLoggedInUseCase(
+    userRepository: userRepository
+)
+
+let observeLoginUseCase = DefaultObserveUserIsLoggedInUseCase(
+    userRepository: userRepository
+)
+
+// Use cases interact with the repository through the protocol
+let result = await loginUseCase.execute(
+    username: "john.doe",
+    password: "password123"
+)
+```

@@ -1,0 +1,683 @@
+---
+title: Architecture layers
+description: Detailed explanation of each layer in the Clean Architecture implementation
+---
+
+## Layer overview
+
+The architecture consists of four distinct layers, each with specific responsibilities and dependencies:
+
+1. **Domain layer** (innermost) - Pure business logic
+2. **Data layer** - External data handling
+3. **Presentation layer** - User interface and interaction
+4. **Application layer** (outermost) - Composition and coordination
+
+<Info>
+Layers are organized from most stable (Domain) to most volatile (Application). Inner layers change less frequently than outer layers.
+</Info>
+
+## Domain layer
+
+The domain layer is the **core** of the application, containing pure business logic with zero dependencies on frameworks or external systems.
+
+### Location
+
+```
+User/Sources/Domain/
+├── Model/          # Entities and domain errors
+├── Repository/     # Repository contracts (protocols)
+└── UseCases/       # Business operations
+```
+
+### Components
+
+#### Entities
+
+Entities are core business objects representing domain concepts. They are:
+- Framework-independent plain Swift structs or classes
+- Immutable (value types preferred)
+- Contain no business logic (just data)
+
+```swift User/Sources/Domain/Model/User.swift
+public struct User: Equatable, Sendable {
+    public let id: UUID
+    public let username: String
+
+    public init(id: UUID, username: String) {
+        self.id = id
+        self.username = username
+    }
+}
+```
+
+<Note>
+Entities represent **what** the business cares about, not **how** the system works.
+</Note>
+
+#### Domain errors
+
+Domain-specific errors that represent business rule violations:
+
+```swift User/Sources/Domain/Model/LoginError.swift
+public enum LoginError: Error {
+    case invalidCredentials
+    case usernameIsEmpty
+    case passwordIsEmpty
+    case unknown
+}
+```
+
+#### Use cases
+
+Use cases orchestrate business operations. Each use case:
+- Represents a **single** business action
+- Is defined by a protocol and implemented by a struct
+- Depends only on repository contracts (protocols)
+- Contains validation and business rules
+
+**Protocol definition:**
+
+```swift User/Sources/Domain/UseCases/UserLoginUseCase.swift
+public protocol UserLoginUseCase {
+    @MainActor
+    func execute(username: String, password: String) async -> Result<Void, LoginError>
+}
+```
+
+**Implementation:**
+
+```swift User/Sources/Domain/UseCases/UserLoginUseCase.swift
+public struct DefaultUserLoginUseCase: UserLoginUseCase {
+    let userRepository: UserRepository
+
+    public init(userRepository: UserRepository) {
+        self.userRepository = userRepository
+    }
+
+    @MainActor
+    public func execute(username: String, password: String) async -> Result<Void, LoginError> {
+        // Validation logic
+        if username.isEmpty {
+            return .failure(.usernameIsEmpty)
+        }
+        if password.isEmpty {
+            return .failure(.passwordIsEmpty)
+        }
+        
+        // Delegate to repository
+        return await userRepository.login(username: username, password: password)
+    }
+}
+```
+
+<Warning>
+Use cases should contain **business rules**, not data access logic. Data access is delegated to repositories.
+</Warning>
+
+#### Other use case examples
+
+**Checking login state:**
+
+```swift User/Sources/Domain/UseCases/UserIsLoggedInUseCase.swift
+public protocol UserIsLoggedInUseCase {
+    @MainActor
+    func execute() async -> Bool
+}
+
+public struct DefaultUserIsLoggedInUseCase: UserIsLoggedInUseCase {
+    let userRepository: UserRepository
+    
+    @MainActor
+    public func execute() async -> Bool {
+        await withCheckedContinuation { continuation in
+            let cancellable = userRepository.loggedInPublisher
+                .first()
+                .sink { isLoggedIn in
+                    continuation.resume(returning: isLoggedIn)
+                }
+            _ = cancellable
+        }
+    }
+}
+```
+
+**Observing login state changes:**
+
+```swift User/Sources/Domain/UseCases/ObserveUserIsLoggedInUseCase.swift
+public protocol ObserveUserIsLoggedInUseCase {
+    @MainActor
+    func execute() -> AnyPublisher<Bool, Never>
+}
+
+public struct DefaultObserveUserIsLoggedInUseCase: ObserveUserIsLoggedInUseCase {
+    let userRepository: UserRepository
+    
+    @MainActor
+    public func execute() -> AnyPublisher<Bool, Never> {
+        userRepository.loggedInPublisher
+    }
+}
+```
+
+#### Repository contracts
+
+Repository contracts define **how** the domain accesses data without specifying **how** it's implemented:
+
+```swift User/Sources/Domain/Repository/UserRepository.swift
+public protocol UserRepository {
+    @MainActor
+    var loggedInPublisher: AnyPublisher<Bool, Never> { get }
+    
+    @MainActor
+    func login(username: String, password: String) async -> Result<Void, LoginError>
+    
+    @MainActor
+    func logout() async
+}
+```
+
+<Info>
+Repository contracts use domain types (`LoginError`) not data layer types (`AuthClientError`). This keeps the domain independent.
+</Info>
+
+### Domain layer dependencies
+
+```
+Domain Layer
+├── Foundation (only for basic types like UUID, Date)
+├── Combine (for publishers)
+└── NO other dependencies
+```
+
+## Data layer
+
+The data layer implements repository contracts and handles all external data concerns.
+
+### Location
+
+```
+User/Sources/Data/
+├── DefaultUserRepository.swift    # Repository implementation
+├── Auth/
+│   ├── AuthClient.swift          # API client protocol and implementation
+│   └── DTO/
+│       └── AuthToken.swift       # Data transfer object
+└── Session/
+    └── UserSession.swift         # Session management
+```
+
+### Components
+
+#### Repository implementations
+
+Repositories coordinate between multiple data sources:
+
+```swift User/Sources/Data/DefaultUserRepository.swift
+public final class DefaultUserRepository: UserRepository {
+    private let session: UserSession
+    private let authClient: AuthClient
+
+    public var loggedInPublisher: AnyPublisher<Bool, Never> {
+        session.isLoggedInPublisher
+    }
+
+    public init(session: UserSession, authClient: AuthClient) {
+        self.session = session
+        self.authClient = authClient
+    }
+
+    @MainActor
+    public func login(username: String, password: String) async -> Result<Void, LoginError> {
+        let result = await authClient.login(username: username, password: password)
+        switch result {
+        case let .success((user, token)):
+            session.setUser(user, token: token)
+            return .success(())
+        case .failure(let error):
+            return .failure(mapAuthClientErrorToLoginError(error))
+        }
+    }
+
+    @MainActor
+    public func logout() async {
+        _ = await authClient.logout()
+        session.clear()
+    }
+
+    private func mapAuthClientErrorToLoginError(_ error: AuthClientError) -> LoginError {
+        switch error {
+        case .invalidCredentials:
+            return .invalidCredentials
+        case .networkFailure, .unknown:
+            return .unknown
+        }
+    }
+}
+```
+
+<Note>
+Notice how the repository **maps** `AuthClientError` to `LoginError`. This prevents data layer errors from leaking into the domain.
+</Note>
+
+#### Data sources
+
+Data sources handle a single source of data (API, database, cache, session):
+
+**API Client:**
+
+```swift User/Sources/Data/Auth/AuthClient.swift
+public enum AuthClientError: Error, Equatable {
+    case invalidCredentials
+    case networkFailure
+    case unknown
+}
+
+public protocol AuthClient: Sendable {
+    func login(username: String, password: String) async -> Result<(User, AuthToken), AuthClientError>
+    func logout() async -> Result<Void, AuthClientError>
+}
+```
+
+**Session Manager:**
+
+```swift User/Sources/Data/Session/UserSession.swift
+@MainActor
+public protocol UserSession: AnyObject {
+    var user: User? { get }
+    var authToken: AuthToken? { get }
+    var isLoggedInPublisher: AnyPublisher<Bool, Never> { get }
+    func setUser(_ user: User, token: AuthToken)
+    func clear()
+}
+
+@MainActor
+public final class DefaultUserSession: UserSession {
+    public private(set) var user: User?
+    public private(set) var authToken: AuthToken?
+    private let isLoggedInSubject: CurrentValueSubject<Bool, Never>
+
+    public func setUser(_ user: User, token: AuthToken) {
+        self.user = user
+        self.authToken = token
+        isLoggedInSubject.send(true)
+        scheduleExpiry(for: token)
+    }
+
+    public func clear() {
+        self.user = nil
+        self.authToken = nil
+        isLoggedInSubject.send(false)
+        cancelExpiryTimer()
+    }
+}
+```
+
+### Data layer dependencies
+
+```
+Data Layer
+├── Domain Layer (entities, repository contracts, domain errors)
+├── Foundation
+├── Combine
+└── External SDKs (URLSession, CoreData, Firebase, etc.)
+```
+
+## Presentation layer
+
+The presentation layer handles user interface and user interactions using the MVVM pattern.
+
+### Location
+
+Each feature is an independent module:
+
+```
+LoginUI/
+├── Sources/
+│   ├── UI/
+│   │   └── LoginScreen/
+│   │       ├── LoginScreenView.swift
+│   │       └── LoginScreenViewModel.swift
+│   ├── Navigation/
+│   │   └── LoginNavigation.swift
+│   └── DI/
+│       └── LoginUIDI.swift
+└── Tests/
+```
+
+### Components
+
+#### ViewModels
+
+ViewModels are `@MainActor` observable classes that:
+- Manage UI state using `@Published` properties
+- Coordinate with use cases
+- Map domain errors to user-friendly messages
+- Handle loading states and error presentation
+
+```swift LoginUI/Sources/UI/LoginScreen/LoginScreenViewModel.swift
+@MainActor
+public final class LoginScreenViewModel: ObservableObject {
+    private let userLogin: UserLoginUseCase
+
+    @Published var username: String = ""
+    @Published var password: String = ""
+    @Published var isLoading: Bool = false
+    @Published var error: String?
+
+    public init(userLogin: UserLoginUseCase) {
+        self.userLogin = userLogin
+    }
+
+    func login() async {
+        isLoading = true
+        defer { isLoading = false }
+        error = nil
+
+        let result = await userLogin.execute(username: username, password: password)
+        switch result {
+        case .success:
+            break
+        case .failure(let loginError):
+            self.error = mapLoginErrorToMessage(loginError)
+        }
+    }
+
+    private func mapLoginErrorToMessage(_ error: LoginError) -> String {
+        switch error {
+        case .usernameIsEmpty:
+            return "Username is required."
+        case .passwordIsEmpty:
+            return "Password is required."
+        case .invalidCredentials:
+            return "Invalid username or password."
+        case .unknown:
+            return "An unknown error occurred. Please try again later."
+        }
+    }
+}
+```
+
+<Warning>
+ViewModels should **never** import the Data layer. They only depend on Domain layer protocols (use cases).
+</Warning>
+
+#### Views
+
+Views are pure SwiftUI components that:
+- Display data from ViewModels
+- Capture user input
+- Delegate actions to ViewModels
+- Contain no business logic
+
+```swift LoginUI/Sources/UI/LoginScreen/LoginScreenView.swift
+public struct LoginScreenView: View {
+    @ObservedObject var viewModel: LoginScreenViewModel
+    
+    public var body: some View {
+        VStack {
+            TextField("Username", text: $viewModel.username)
+            SecureField("Password", text: $viewModel.password)
+            
+            if let error = viewModel.error {
+                Text(error).foregroundColor(.red)
+            }
+            
+            Button("Login") {
+                Task { await viewModel.login() }
+            }
+            .disabled(viewModel.isLoading)
+        }
+    }
+}
+```
+
+#### Navigation protocols
+
+Each feature defines its navigation requirements:
+
+```swift HomeUI/Sources/Navigation/HomeNavigation.swift
+public protocol HomeNavigation: AnyObject {
+    func openHomeDetail(id: UUID)
+    func openWishlistDetail(id: UUID)
+}
+```
+
+#### Feature DI containers
+
+Each feature has a DI container that creates ViewModels and Views:
+
+```swift LoginUI/Sources/DI/LoginUIDI.swift
+public struct LoginUIDI {
+    private let userDI: UserDI
+
+    public init(userDI: UserDI) {
+        self.userDI = userDI
+    }
+
+    @MainActor
+    public func makeLoginScreenViewModel() -> LoginScreenViewModel {
+        LoginScreenViewModel(userLogin: userDI.userLoginUseCase)
+    }
+    
+    @MainActor
+    public func loginView() -> some View {
+        LoginScreenView(viewModel: makeLoginScreenViewModel())
+    }
+}
+```
+
+```swift HomeUI/Sources/DI/HomeUIDI.swift
+public struct HomeUIDI {
+    private let navigation: HomeNavigation
+
+    public init(navigation: HomeNavigation) {
+        self.navigation = navigation
+    }
+
+    @MainActor
+    public func mainView() -> some View {
+        HomeScreenView(
+            viewModel: HomeScreenViewModel(),
+            navigation: navigation
+        )
+    }
+    
+    @MainActor
+    public func detailView(id: UUID) -> some View {
+        HomeDetailScreenView(id: id)
+    }
+}
+```
+
+<Info>
+Domain-based features (like Login) receive **domain DI containers** (`UserDI`), while navigation-based features (like Home) receive **navigation protocols** (`HomeNavigation`).
+</Info>
+
+### Presentation layer dependencies
+
+```
+Presentation Layer
+├── Domain Layer (use cases, entities, domain errors)
+├── SwiftUI
+├── Combine
+└── Foundation
+```
+
+## Application layer
+
+The application layer is the **composition root** that wires everything together.
+
+### Location
+
+```
+iPhone/
+├── Main/
+│   ├── Main.swift          # App entry point
+│   ├── MainViewModel.swift
+│   └── TabScreen.swift
+├── Navigation/
+│   ├── Navigator.swift     # Navigation coordinator
+│   └── Destination.swift   # Destination enum
+└── Injector.swift          # Dependency injection container
+```
+
+### Components
+
+#### Dependency injection container
+
+The `Injector` creates and wires all dependencies:
+
+```swift iPhone/Injector.swift
+@MainActor
+final class Injector {
+    static let shared = Injector()
+    
+    // MARK: - Components
+    let userDI: UserDI
+
+    // MARK: - Feature Navigation
+    let navigator: Navigator
+    
+    // MARK: - UIDI Properties
+    let loginUIDI: LoginUIDI
+    let homeUIDI: HomeUIDI
+    let wishlistUIDI: WishlistUIDI
+    let cartUIDI: CartUIDI
+
+    private init() {
+        // MARK: Navigation
+        navigator = Navigator()
+        
+        // MARK: User Component DI
+        userDI = UserDI()
+
+        // MARK: UI Features
+        loginUIDI = LoginUIDI(userDI: userDI)
+        homeUIDI = HomeUIDI(navigation: navigator)
+        wishlistUIDI = WishlistUIDI(navigation: navigator)
+        cartUIDI = CartUIDI(navigation: navigator)
+    }
+}
+```
+
+#### Domain DI container
+
+```swift User/Sources/DI/UserDI.swift
+public struct UserDI {
+    // MARK: - Data Sources
+    private let userSession: UserSession
+    private let authClient: AuthClient
+
+    // MARK: - Repository
+    private let userRepository: UserRepository
+
+    // MARK: - Use Cases
+    public let userLoginUseCase: UserLoginUseCase
+    public let userIsLoggedInUseCase: UserIsLoggedInUseCase
+    public let observeUserIsLoggedInUseCase: ObserveUserIsLoggedInUseCase
+
+    @MainActor
+    public init(
+        userSession: UserSession = DefaultUserSession(),
+        authClient: AuthClient = FakeAuthClient()
+    ) {
+        self.userSession = userSession
+        self.authClient = authClient
+
+        let repository = DefaultUserRepository(session: userSession, authClient: authClient)
+        self.userRepository = repository
+        
+        self.userLoginUseCase = DefaultUserLoginUseCase(userRepository: repository)
+        self.userIsLoggedInUseCase = DefaultUserIsLoggedInUseCase(userRepository: repository)
+        self.observeUserIsLoggedInUseCase = DefaultObserveUserIsLoggedInUseCase(userRepository: repository)
+    }
+}
+```
+
+#### Navigation coordinator
+
+The `Navigator` manages navigation state and implements all navigation protocols:
+
+```swift iPhone/Navigation/Navigator.swift
+@MainActor
+final class Navigator: ObservableObject {
+    @Published var selectedTab: Tabs = .home
+    @Published var homePath = NavigationPath()
+    @Published var wishlistPath = NavigationPath()
+    @Published var cartPath = NavigationPath()
+
+    func push(_ route: any Hashable, tab: Tabs? = nil) {
+        let destinationTab = tab ?? selectedTab
+        if destinationTab != selectedTab {
+            resetPath(for: destinationTab)
+            selectedTab = destinationTab
+        }
+        switch destinationTab {
+        case .home:
+            homePath.append(AnyHashable(route))
+        case .wishlist:
+            wishlistPath.append(AnyHashable(route))
+        case .cart:
+            cartPath.append(AnyHashable(route))
+        }
+    }
+}
+
+extension Navigator: HomeNavigation, WishlistNavigation, CartNavigation {
+    func openHomeDetail(id: UUID) {
+        push(Destination.homeDetail(id: id))
+    }
+    
+    func openWishlistDetail(id: UUID) {
+        push(Destination.wishlistDetail(id: id))
+    }
+    
+    func openCartDetail(id: UUID) {
+        push(Destination.cartDetail(id: id))
+    }
+}
+```
+
+#### Destination enum
+
+```swift iPhone/Navigation/Destination.swift
+public enum Destination: Hashable {
+    case homeDetail(id: UUID)
+    case wishlistDetail(id: UUID)
+    case cartDetail(id: UUID)
+    
+    @ViewBuilder
+    func makeView() -> some View {
+        switch self {
+        case .homeDetail(let id):
+            Injector.shared.homeUIDI.detailView(id: id)
+        case .wishlistDetail(let id):
+            Injector.shared.wishlistUIDI.detailView(id: id)
+        case .cartDetail(let id):
+            Injector.shared.cartUIDI.detailView(id: id)
+        }
+    }
+}
+```
+
+### Application layer dependencies
+
+```
+Application Layer
+├── All other layers
+├── SwiftUI
+└── All external frameworks
+```
+
+<Warning>
+Only the Application layer should import and instantiate concrete implementations. All other layers should depend on protocols.
+</Warning>
+
+## Summary
+
+| Layer | Responsibilities | Dependencies |
+|-------|-----------------|-------------|
+| **Domain** | Business logic, entities, use case contracts, repository contracts | Foundation, Combine only |
+| **Data** | Repository implementations, data sources, DTOs, error mapping | Domain, external SDKs |
+| **Presentation** | Views, ViewModels, navigation protocols, feature DI | Domain, SwiftUI |
+| **Application** | Dependency injection, navigation coordination, app entry | All layers |

@@ -1,0 +1,108 @@
+---
+title: Domain entities
+description: Core domain entities representing business data models
+---
+
+## User
+
+Represents a user in the system.
+
+```swift
+public struct User: Equatable, Sendable
+```
+
+### Properties
+
+<ParamField path="id" type="UUID">
+  Unique identifier for the user
+</ParamField>
+
+<ParamField path="username" type="String">
+  The username of the user
+</ParamField>
+
+### Initializer
+
+```swift
+public init(id: UUID, username: String)
+```
+
+<ParamField path="id" type="UUID" required>
+  Unique identifier for the user
+</ParamField>
+
+<ParamField path="username" type="String" required>
+  The username of the user
+</ParamField>
+
+### Example
+
+```swift
+import Foundation
+
+// Create a new user
+let user = User(
+    id: UUID(),
+    username: "john.doe"
+)
+
+// Access properties
+print(user.id)        // UUID value
+print(user.username)  // "john.doe"
+
+// Compare users
+let user2 = User(id: UUID(), username: "jane.doe")
+let areEqual = user == user2  // false
+```
+
+## LoginError
+
+Represents possible errors that can occur during user authentication.
+
+```swift
+public enum LoginError: Error
+```
+
+### Cases
+
+<ParamField path="invalidCredentials" type="case">
+  The provided username or password is incorrect
+</ParamField>
+
+<ParamField path="usernameIsEmpty" type="case">
+  The username field is empty
+</ParamField>
+
+<ParamField path="passwordIsEmpty" type="case">
+  The password field is empty
+</ParamField>
+
+<ParamField path="unknown" type="case">
+  An unknown error occurred during login
+</ParamField>
+
+### Example
+
+```swift
+import Foundation
+
+// Handle login errors
+func handleLoginResult(_ result: Result<Void, LoginError>) {
+    switch result {
+    case .success:
+        print("Login successful")
+    
+    case .failure(let error):
+        switch error {
+        case .invalidCredentials:
+            print("Invalid username or password")
+        case .usernameIsEmpty:
+            print("Please enter a username")
+        case .passwordIsEmpty:
+            print("Please enter a password")
+        case .unknown:
+            print("An unexpected error occurred")
+        }
+    }
+}
+```

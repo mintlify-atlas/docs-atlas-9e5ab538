@@ -1,0 +1,350 @@
+---
+title: Navigator
+description: Central navigation coordinator that manages tab-based navigation and routing
+---
+
+The `Navigator` class is the central navigation coordinator for the application. It manages tab selection, navigation paths, and view factories using a type-safe, protocol-based approach.
+
+## Overview
+
+Navigator is an `ObservableObject` that maintains navigation state for a tab-based application. It uses SwiftUI's `NavigationPath` for type-safe routing and implements a type-erased factory pattern to decouple features.
+
+## Declaration
+
+```swift iPhone/Navigation/Navigator.swift
+@MainActor
+final class Navigator: ObservableObject {
+    enum Tabs: Hashable {
+        case home, wishlist, cart
+    }
+    
+    @Published var selectedTab: Tabs = .home
+    @Published var homePath = NavigationPath()
+    @Published var wishlistPath = NavigationPath()
+    @Published var cartPath = NavigationPath()
+    
+    private var factories: [ObjectIdentifier: (Any) -> AnyView] = [:]
+}
+```
+
+## Properties
+
+<ParamField path="selectedTab" type="Tabs">
+  The currently selected tab. Published property that triggers UI updates when changed.
+</ParamField>
+
+<ParamField path="homePath" type="NavigationPath">
+  Navigation path for the Home tab. Maintains the navigation stack for home-related screens.
+</ParamField>
+
+<ParamField path="wishlistPath" type="NavigationPath">
+  Navigation path for the Wishlist tab. Maintains the navigation stack for wishlist-related screens.
+</ParamField>
+
+<ParamField path="cartPath" type="NavigationPath">
+  Navigation path for the Cart tab. Maintains the navigation stack for cart-related screens.
+</ParamField>
+
+## Methods
+
+### buildView
+
+Registers a view factory for a specific route type.
+
+```swift
+public func buildView<Route: Hashable>(
+    factory: @escaping (Route) -> some View
+)
+```
+
+<ParamField path="factory" type="(Route) -> some View">
+  A closure that creates a view for the given route
+</ParamField>
+
+**Example:**
+```swift
+navigator.buildView { (route: CustomRoute) in
+    CustomDetailView(route: route)
+}
+```
+
+### registerDestinations
+
+Registers destinations that have a `makeView()` method.
+
+```swift
+public func registerDestinations<Route: Hashable>(
+    _ routeType: Route.Type,
+    makeView: @escaping (Route) -> some View
+)
+```
+
+<ParamField path="routeType" type="Route.Type">
+  The type of route to register
+</ParamField>
+
+<ParamField path="makeView" type="(Route) -> some View">
+  A closure that creates a view for the route
+</ParamField>
+
+**Example:**
+```swift
+init() {
+    registerDestinations(Destination.self) { destination in
+        destination.makeView()
+    }
+}
+```
+
+### view(for:)
+
+Looks up and creates a view for a given route.
+
+```swift
+func view(for route: Any) -> AnyView?
+```
+
+<ParamField path="route" type="Any">
+  The route to create a view for
+</ParamField>
+
+**Returns:** An `AnyView` instance if a factory is registered for the route type, otherwise `nil`.
+
+### push
+
+Navigates to a new route, optionally switching tabs.
+
+```swift
+func push(_ route: any Hashable, tab: Tabs? = nil)
+```
+
+<ParamField path="route" type="any Hashable">
+  The destination to navigate to
+</ParamField>
+
+<ParamField path="tab" type="Tabs?" default="nil">
+  Optional tab to switch to before navigating. If nil, uses the current tab.
+</ParamField>
+
+**Example:**
+```swift
+// Navigate within current tab
+navigator.push(Destination.homeDetail(id: id))
+
+// Navigate and switch to cart tab
+navigator.push(Destination.cartDetail(id: id), tab: .cart)
+```
+
+### pop
+
+Removes the last item from the current tab's navigation path.
+
+```swift
+func pop()
+```
+
+**Example:**
+```swift
+navigator.pop() // Go back one screen
+```
+
+### resetPath
+
+Clears the navigation path for a specific tab.
+
+```swift
+func resetPath(for tab: Tabs)
+```
+
+<ParamField path="tab" type="Tabs">
+  The tab whose navigation path should be reset
+</ParamField>
+
+## Navigation protocols
+
+Navigator implements feature-specific navigation protocols through extensions:
+
+```swift iPhone/Navigation/Destination.swift
+extension Navigator:
+    HomeNavigation,
+    WishlistNavigation,
+    CartNavigation
+{
+    func openHomeDetail(id: UUID) {
+        push(Destination.homeDetail(id: id))
+    }
+    
+    func openWishlistDetail(id: UUID) {
+        push(Destination.wishlistDetail(id: id))
+    }
+    
+    func openCartDetail(id: UUID) {
+        push(Destination.cartDetail(id: id))
+    }
+}
+```
+
+<Note>
+  This approach allows features to depend on navigation protocols (like `HomeNavigation`) instead of the concrete `Navigator` class, supporting dependency inversion.
+</Note>
+
+## Destination enum
+
+The `Destination` enum defines all possible navigation targets:
+
+```swift iPhone/Navigation/Destination.swift
+public enum Destination: Hashable {
+    case homeDetail(id: UUID)
+    case wishlistDetail(id: UUID)
+    case cartDetail(id: UUID)
+    
+    @ViewBuilder
+    func makeView() -> some View {
+        switch self {
+        case .homeDetail(let id):
+            Injector.shared.homeUIDI.detailView(id: id)
+        case .wishlistDetail(let id):
+            Injector.shared.wishlistUIDI.detailView(id: id)
+        case .cartDetail(let id):
+            Injector.shared.cartUIDI.detailView(id: id)
+        }
+    }
+}
+```
+
+## Usage examples
+
+### Basic navigation
+
+```swift
+// In a ViewModel
+class HomeScreenViewModel: ObservableObject {
+    private let navigation: HomeNavigation
+    
+    init(navigation: HomeNavigation) {
+        self.navigation = navigation
+    }
+    
+    func didSelectItem(id: UUID) {
+        navigation.openHomeDetail(id: id)
+    }
+}
+```
+
+### Cross-tab navigation
+
+```swift
+// Navigate from Home to Cart detail
+navigator.push(Destination.cartDetail(id: itemId), tab: .cart)
+```
+
+### Resetting navigation
+
+```swift
+// Clear navigation stack when switching tabs
+navigator.resetPath(for: .home)
+navigator.selectedTab = .home
+```
+
+## Navigation flow
+
+<Steps>
+  <Step title="User action in View">
+    User taps a button, triggering a ViewModel method
+  </Step>
+  
+  <Step title="ViewModel calls navigation protocol">
+    ViewModel calls a method on its navigation dependency (e.g., `HomeNavigation`)
+  </Step>
+  
+  <Step title="Navigator receives call">
+    Navigator implements the protocol and receives the navigation request
+  </Step>
+  
+  <Step title="Navigator pushes destination">
+    `push()` adds the destination to the appropriate `NavigationPath`
+  </Step>
+  
+  <Step title="SwiftUI detects path change">
+    SwiftUI's `NavigationStack` observes the path change
+  </Step>
+  
+  <Step title="Navigator creates view">
+    `view(for:)` looks up the factory and creates the destination view
+  </Step>
+  
+  <Step title="View is displayed">
+    SwiftUI displays the new view in the navigation stack
+  </Step>
+</Steps>
+
+## Type-erased factory pattern
+
+The Navigator uses a type-erased factory pattern to avoid circular dependencies:
+
+```swift
+private var factories: [ObjectIdentifier: (Any) -> AnyView] = [:]
+
+public func buildView<Route: Hashable>(
+    factory: @escaping (Route) -> some View
+) {
+    let key = ObjectIdentifier(Route.self)
+    factories[key] = { any in
+        guard let route = any as? Route else { return AnyView(EmptyView()) }
+        return AnyView(factory(route))
+    }
+}
+```
+
+This pattern allows features to register view factories without the Navigator knowing about specific view types.
+
+## Testing
+
+Mock the Navigator for testing by conforming to navigation protocols:
+
+```swift
+final class MockHomeNavigation: HomeNavigation {
+    var openedDetailIds: [UUID] = []
+    
+    func openHomeDetail(id: UUID) {
+        openedDetailIds.append(id)
+    }
+    
+    func goToWishlistDetail(id: UUID) {
+        // Mock implementation
+    }
+}
+
+// Use in tests
+let mockNav = MockHomeNavigation()
+let viewModel = HomeScreenViewModel(navigation: mockNav)
+viewModel.didSelectItem(id: testId)
+
+XCTAssertEqual(mockNav.openedDetailIds, [testId])
+```
+
+## Architecture benefits
+
+<CardGroup cols={2}>
+  <Card title="Type safety" icon="shield-check">
+    SwiftUI's NavigationPath ensures type-safe routing at compile time
+  </Card>
+  
+  <Card title="Dependency inversion" icon="arrows-turn-to-dots">
+    Features depend on navigation protocols, not concrete Navigator class
+  </Card>
+  
+  <Card title="Centralized routing" icon="sitemap">
+    All navigation logic lives in one place, easy to debug and modify
+  </Card>
+  
+  <Card title="Testability" icon="flask">
+    Mock navigation protocols for isolated ViewModel testing
+  </Card>
+</CardGroup>
+
+## See also
+
+- [Navigation architecture](/advanced/navigation) - Detailed navigation guide
+- [Destination enum](#destination-enum) - Route definitions
+- [Feature DI containers](/api/presentation/feature-di) - How navigation is injected

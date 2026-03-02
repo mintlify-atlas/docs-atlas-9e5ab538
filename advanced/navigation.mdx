@@ -1,0 +1,294 @@
+---
+title: Navigation architecture
+description: Learn how to implement type-safe navigation using Navigator, protocols, and destination enums in your iOS Clean Architecture app
+---
+
+The navigation architecture provides a centralized, type-safe approach to managing navigation flows across multiple tabs and features.
+
+## Core components
+
+The navigation system consists of three main components:
+
+1. **Navigator** - Centralized navigation coordinator
+2. **Navigation protocols** - Feature-specific navigation contracts
+3. **Destination enum** - Type-safe route definitions
+
+## Navigator
+
+The `Navigator` class manages navigation state for a tab-based application using SwiftUI's `NavigationPath`.
+
+```swift Navigator.swift
+@MainActor
+final class Navigator: ObservableObject {
+    enum Tabs: Hashable {
+        case home, wishlist, cart
+    }
+    
+    @Published var selectedTab: Tabs = .home
+    @Published var homePath = NavigationPath()
+    @Published var wishlistPath = NavigationPath()
+    @Published var cartPath = NavigationPath()
+
+    // Type-erased factory registry
+    private var factories: [ObjectIdentifier: (Any) -> AnyView] = [:]
+    
+    init() {
+        // Register destinations
+        registerDestinations(Destination.self) { destination in
+            destination.makeView()
+        }
+    }
+}
+```
+
+### Registering destinations
+
+The Navigator uses a type-erased factory pattern to register view builders for each route type:
+
+```swift Navigator.swift
+public func registerDestinations<Route: Hashable>(
+    _ routeType: Route.Type,
+    makeView: @escaping (Route) -> some View
+) {
+    buildView { (route: Route) -> AnyView in
+        AnyView(makeView(route))
+    }
+}
+
+public func buildView<Route: Hashable>(
+    factory: @escaping (Route) -> some View
+) {
+    let key = ObjectIdentifier(Route.self)
+    factories[key] = { any in
+        guard let route = any as? Route else { return AnyView(EmptyView()) }
+        return AnyView(factory(route))
+    }
+}
+```
+
+<Note>
+  The factory pattern allows the Navigator to work with any `Hashable` route type while maintaining type safety at compile time.
+</Note>
+
+### Navigation operations
+
+The Navigator provides methods to control navigation state:
+
+```swift Navigator.swift
+func push(_ route: any Hashable, tab: Tabs? = nil) {
+    let destinationTab = tab ?? selectedTab
+    if destinationTab != selectedTab {
+        resetPath(for: destinationTab)
+        selectedTab = destinationTab
+    }
+    let anyRoute = AnyHashable(route)
+    switch destinationTab {
+    case .home:
+        homePath.append(anyRoute)
+    case .wishlist:
+        wishlistPath.append(anyRoute)
+    case .cart:
+        cartPath.append(anyRoute)
+    }
+}
+
+func pop() {
+    switch selectedTab {
+    case .home:
+        homePath.removeLast()
+    case .wishlist:
+        wishlistPath.removeLast()
+    case .cart:
+        cartPath.removeLast()
+    }
+}
+
+func resetPath(for tab: Tabs) {
+    switch tab {
+    case .home:
+        homePath = NavigationPath()
+    case .wishlist:
+        wishlistPath = NavigationPath()
+    case .cart:
+        cartPath = NavigationPath()
+    }
+}
+```
+
+## Navigation protocols
+
+Each feature module defines a navigation protocol that declares the navigation actions it needs. This inverts the dependency: the feature doesn't depend on the Navigator, the Navigator conforms to the feature's protocol.
+
+<Steps>
+  <Step title="Define feature navigation protocol">
+    Create a protocol in your feature module that declares required navigation actions:
+
+    ```swift HomeNavigation.swift
+    public protocol HomeNavigation: AnyObject {
+        func openHomeDetail(id: UUID)
+        func openWishlistDetail(id: UUID)
+    }
+    ```
+  </Step>
+
+  <Step title="Inject navigation into feature">
+    Feature modules receive navigation dependencies through their DI container:
+
+    ```swift HomeUIDI.swift
+    public struct HomeUIDI {
+        private let navigation: HomeNavigation
+
+        public init(navigation: HomeNavigation) {
+            self.navigation = navigation
+        }
+
+        @MainActor
+        public func mainView() -> some View {
+            HomeScreenView(
+                viewModel: HomeScreenViewModel(),
+                navigation: navigation
+            )
+        }
+    }
+    ```
+  </Step>
+
+  <Step title="Implement protocol in Navigator">
+    The Navigator conforms to all feature navigation protocols:
+
+    ```swift Destination.swift
+    extension Navigator:
+        HomeNavigation,
+        WishlistNavigation,
+        CartNavigation
+    {
+        func openHomeDetail(id: UUID) {
+            push(Destination.homeDetail(id: id))
+        }
+        
+        func openWishlistDetail(id: UUID) {
+            push(Destination.wishlistDetail(id: id))
+        }
+        
+        func openCartDetail(id: UUID) {
+            push(Destination.cartDetail(id: id))
+        }
+    }
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+  Navigation protocols should be defined in the feature module, not in the app target. This ensures features remain independent and testable.
+</Warning>
+
+## Destination enum
+
+The `Destination` enum centralizes all route definitions and their corresponding views:
+
+```swift Destination.swift
+public enum Destination: Hashable {
+    case homeDetail(id: UUID)
+    case wishlistDetail(id: UUID)
+    case cartDetail(id: UUID)
+    
+    @ViewBuilder
+    func makeView() -> some View {
+        switch self {
+        case .homeDetail(let id):
+            Injector.shared.homeUIDI.detailView(id: id)
+        case .wishlistDetail(let id):
+            Injector.shared.wishlistUIDI.detailView(id: id)
+        case .cartDetail(let id):
+            Injector.shared.cartUIDI.detailView(id: id)
+        }
+    }
+}
+```
+
+### Benefits of destination enum
+
+<CardGroup cols={2}>
+  <Card title="Type safety" icon="shield-check">
+    All routes are defined at compile time, eliminating string-based routing errors
+  </Card>
+  <Card title="Associated values" icon="link">
+    Routes can carry typed parameters like `UUID` for detail screens
+  </Card>
+  <Card title="Hashable conformance" icon="hashtag">
+    Works seamlessly with SwiftUI's NavigationPath
+  </Card>
+  <Card title="Centralized logic" icon="sitemap">
+    All view creation logic is in one place for easy maintenance
+  </Card>
+</CardGroup>
+
+## Cross-tab navigation
+
+The Navigator supports navigating to routes in different tabs:
+
+```swift
+// Navigate to cart detail from home screen
+navigator.push(Destination.cartDetail(id: itemId), tab: .cart)
+```
+
+When navigating to a different tab, the Navigator automatically:
+1. Resets the destination tab's navigation path
+2. Switches to the destination tab
+3. Pushes the new route
+
+## Testing navigation
+
+Create a mock implementation of the navigation protocol for testing:
+
+```swift MockHomeNavigation.swift
+final class MockHomeNavigation: HomeNavigation {
+    var openedHomeDetailId: UUID?
+    var openedWishlistDetailId: UUID?
+    
+    func openHomeDetail(id: UUID) {
+        openedHomeDetailId = id
+    }
+    
+    func openWishlistDetail(id: UUID) {
+        openedWishlistDetailId = id
+    }
+}
+
+// In tests
+func testNavigationToDetail() {
+    let mockNav = MockHomeNavigation()
+    let viewModel = HomeScreenViewModel(navigation: mockNav)
+    
+    let testId = UUID()
+    viewModel.didTapItem(id: testId)
+    
+    XCTAssertEqual(mockNav.openedHomeDetailId, testId)
+}
+```
+
+## Best practices
+
+<AccordionGroup>
+  <Accordion title="Keep navigation protocols minimal">
+    Only include navigation actions that the feature actually needs. Don't expose the entire Navigator to features.
+  </Accordion>
+
+  <Accordion title="Use protocol composition for shared actions">
+    If multiple features need the same navigation action, create a shared protocol and compose it:
+
+    ```swift
+    protocol HomeNavigation: SharedDetailNavigation {
+        func openHomeDetail(id: UUID)
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Define routes in the app target">
+    The Destination enum should live in your app target, not in feature modules. This keeps features decoupled from each other.
+  </Accordion>
+
+  <Accordion title="Reset paths on tab changes">
+    The current implementation resets the navigation stack when switching tabs. Consider if this UX is appropriate for your app.
+  </Accordion>
+</AccordionGroup>

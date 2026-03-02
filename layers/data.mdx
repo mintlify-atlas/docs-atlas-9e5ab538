@@ -1,0 +1,399 @@
+---
+title: Data layer
+description: Repository implementations, data sources, and DTOs that handle data persistence and external APIs
+---
+
+The Data layer implements the repository contracts defined in the Domain layer. It manages data sources, handles data transformations, and abstracts away implementation details from the business logic.
+
+## Architecture overview
+
+The Data layer consists of:
+
+- **Repository Implementations**: Concrete implementations of Domain repository protocols
+- **Data Sources**: Services that fetch/persist data (network clients, databases, caches)
+- **DTOs**: Data Transfer Objects for network/storage representations
+- **Mappers**: Convert between DTOs and Domain entities
+
+<Note>
+The Data layer depends on the Domain layer but knows nothing about the Presentation layer.
+</Note>
+
+## Repository implementations
+
+Repositories implement the protocols defined in the Domain layer and coordinate between multiple data sources.
+
+### Example: User repository
+
+```swift User/Sources/Data/DefaultUserRepository.swift
+import Combine
+import Foundation
+import User
+
+public final class DefaultUserRepository: UserRepository {
+    private let session: UserSession
+    private let authClient: AuthClient
+
+    public var loggedInPublisher: AnyPublisher<Bool, Never> {
+        session.isLoggedInPublisher
+    }
+
+    public init(session: UserSession, authClient: AuthClient) {
+        self.session = session
+        self.authClient = authClient
+    }
+
+    @MainActor
+    public func login(username: String, password: String) async -> Result<Void, LoginError> {
+        let result = await authClient.login(username: username, password: password)
+        switch result {
+        case let .success((user, token)):
+            session.setUser(user, token: token)
+            return .success(())
+        case .failure(let error):
+            return .failure(mapAuthClientErrorToLoginError(error))
+        }
+    }
+
+    @MainActor
+    public func logout() async {
+        _ = await authClient.logout()
+        session.clear()
+    }
+
+    private func mapAuthClientErrorToLoginError(_ error: AuthClientError) -> LoginError {
+        switch error {
+        case .invalidCredentials:
+            return .invalidCredentials
+        case .networkFailure, .unknown:
+            return .unknown
+        }
+    }
+}
+```
+
+### Key responsibilities
+
+<Steps>
+  <Step title="Coordinate data sources">
+    Repositories orchestrate multiple data sources (network, cache, database) to fulfill requests.
+  </Step>
+  
+  <Step title="Map errors">
+    Convert data source-specific errors to Domain layer error types.
+  </Step>
+  
+  <Step title="Handle side effects">
+    Manage state changes like updating session data or invalidating caches.
+  </Step>
+</Steps>
+
+## Data sources
+
+Data sources are specialized services that handle specific types of data operations.
+
+### Network clients
+
+<Tabs>
+  <Tab title="Protocol definition">
+    Define clear contracts for network operations:
+    
+    ```swift User/Sources/Data/Auth/AuthClient.swift:17-20
+    public protocol AuthClient: Sendable {
+        func login(username: String, password: String) async -> Result<(User, AuthToken), AuthClientError>
+        func logout() async -> Result<Void, AuthClientError>
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Error handling">
+    Define data source-specific errors:
+    
+    ```swift User/Sources/Data/Auth/AuthClient.swift:11-15
+    public enum AuthClientError: Error, Equatable {
+        case invalidCredentials
+        case networkFailure
+        case unknown
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Implementation">
+    Implement the client (this example uses a fake client for testing):
+    
+    ```swift User/Sources/Data/Auth/AuthClient.swift:22-48
+    public actor FakeAuthClient: AuthClient {
+        public private(set) var lastLoginToken: AuthToken? = nil
+        
+        public init() {}
+        
+        public func login(username: String, password: String) async -> Result<(User, AuthToken), AuthClientError> {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            
+            if username == "test", password == "test" {
+                return .failure(.invalidCredentials)
+            }
+            guard !username.isEmpty, !password.isEmpty else {
+                return .failure(.invalidCredentials)
+            }
+            
+            let expiry = Date().addingTimeInterval(60)
+            let token = AuthToken(value: UUID().uuidString, expiresAt: expiry)
+            lastLoginToken = token
+            return .success((User(id: UUID(), username: username), token))
+        }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+### Session management
+
+Manage in-memory state and reactive streams:
+
+```swift User/Sources/Data/Session/UserSession.swift
+import Foundation
+import Combine
+import User
+
+@MainActor
+public protocol UserSession: AnyObject {
+    var user: User? { get }
+    var authToken: AuthToken? { get }
+    var isLoggedInPublisher: AnyPublisher<Bool, Never> { get }
+    func setUser(_ user: User, token: AuthToken)
+    func clear()
+}
+
+@MainActor
+public final class DefaultUserSession: UserSession {
+    public private(set) var user: User?
+    public private(set) var authToken: AuthToken?
+    private var expiryTimer: DispatchSourceTimer?
+    private let isLoggedInSubject: CurrentValueSubject<Bool, Never>
+
+    public init() {
+        self.isLoggedInSubject = CurrentValueSubject(false)
+    }
+
+    public var isLoggedInPublisher: AnyPublisher<Bool, Never> {
+        isLoggedInSubject.eraseToAnyPublisher()
+    }
+
+    public func setUser(_ user: User, token: AuthToken) {
+        self.user = user
+        self.authToken = token
+        isLoggedInSubject.send(true)
+        scheduleExpiry(for: token)
+    }
+
+    public func clear() {
+        self.user = nil
+        self.authToken = nil
+        isLoggedInSubject.send(false)
+        cancelExpiryTimer()
+    }
+}
+```
+
+<Note>
+The `UserSession` uses `@MainActor` to ensure all state mutations happen on the main thread, preventing data races.
+</Note>
+
+## DTOs and mapping
+
+Data Transfer Objects represent data in its storage or network format.
+
+### Example: AuthToken DTO
+
+```swift User/Sources/Data/Auth/DTO/AuthToken.swift
+import Foundation
+
+public struct AuthToken: Equatable, Sendable {
+    public let value: String
+    public let expiresAt: Date
+    
+    public init(value: String, expiresAt: Date) {
+        self.value = value
+        self.expiresAt = expiresAt
+    }
+    
+    public var isExpired: Bool {
+        Date() >= expiresAt
+    }
+}
+```
+
+### Mapping strategies
+
+<CodeGroup>
+```swift Direct mapping
+// When DTO matches domain model
+let user = User(id: dto.id, username: dto.username)
+```
+
+```swift Error mapping
+// Convert data layer errors to domain errors
+private func mapAuthClientErrorToLoginError(_ error: AuthClientError) -> LoginError {
+    switch error {
+    case .invalidCredentials:
+        return .invalidCredentials
+    case .networkFailure, .unknown:
+        return .unknown
+    }
+}
+```
+
+```swift Complex transformation
+// Transform nested DTOs to flat domain models
+func mapOrderDTO(_ dto: OrderDTO) -> Order {
+    Order(
+        id: dto.orderId,
+        items: dto.items.map { mapOrderItemDTO($0) },
+        total: dto.pricing.total,
+        status: OrderStatus(rawValue: dto.statusCode) ?? .pending
+    )
+}
+```
+</CodeGroup>
+
+## Concurrency patterns
+
+The Data layer handles asynchronous operations using Swift's modern concurrency features.
+
+### Using actors for thread safety
+
+```swift
+public actor FakeAuthClient: AuthClient {
+    private var lastLoginToken: AuthToken?
+    
+    // Actor isolation ensures thread-safe access
+    public func login(username: String, password: String) async -> Result<(User, AuthToken), AuthClientError> {
+        // Implementation
+    }
+}
+```
+
+### MainActor for UI-bound state
+
+```swift
+@MainActor
+public final class DefaultUserSession: UserSession {
+    // All properties and methods run on the main thread
+    public private(set) var user: User?
+    
+    public func setUser(_ user: User, token: AuthToken) {
+        self.user = user
+        // Safe to update without explicit dispatch
+    }
+}
+```
+
+<Warning>
+Be careful when mixing `@MainActor` types with background operations. Always use `await` when calling `@MainActor` methods from other contexts.
+</Warning>
+
+## Reactive streams with Combine
+
+Use Combine for reactive state updates:
+
+```swift
+public var loggedInPublisher: AnyPublisher<Bool, Never> {
+    session.isLoggedInPublisher
+}
+```
+
+<Steps>
+  <Step title="Create a subject">
+    Use `CurrentValueSubject` or `PassthroughSubject` to emit values.
+  </Step>
+  
+  <Step title="Expose as AnyPublisher">
+    Hide implementation details by erasing to `AnyPublisher`.
+  </Step>
+  
+  <Step title="Consume in use cases">
+    Use cases can subscribe to repositories' publishers for reactive updates.
+  </Step>
+</Steps>
+
+## Testing strategies
+
+<Tabs>
+  <Tab title="Mock data sources">
+    Create fake implementations for testing:
+    
+    ```swift
+    public actor MockAuthClient: AuthClient {
+        public var loginResult: Result<(User, AuthToken), AuthClientError> = .success((
+            User(id: UUID(), username: "test"),
+            AuthToken(value: "token", expiresAt: Date())
+        ))
+        
+        public func login(username: String, password: String) async -> Result<(User, AuthToken), AuthClientError> {
+            return loginResult
+        }
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Test repositories">
+    Verify repository logic with mocked dependencies:
+    
+    ```swift
+    @Test func testLoginSuccess() async {
+        let mockSession = MockUserSession()
+        let mockClient = MockAuthClient()
+        let repo = DefaultUserRepository(session: mockSession, authClient: mockClient)
+        
+        let result = await repo.login(username: "user", password: "pass")
+        
+        #expect(result == .success(()))
+        #expect(mockSession.user != nil)
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Best practices
+
+<AccordionGroup>
+  <Accordion title="Keep repositories focused">
+    Each repository should manage a single aggregate or bounded context. Don't create monolithic repositories.
+  </Accordion>
+  
+  <Accordion title="Use dependency injection">
+    Inject data sources into repositories rather than creating them internally.
+  </Accordion>
+  
+  <Accordion title="Handle errors at the boundary">
+    Map data source errors to domain errors at the repository level.
+  </Accordion>
+  
+  <Accordion title="Prefer actors for stateful services">
+    Use Swift actors for thread-safe data sources that maintain state.
+  </Accordion>
+  
+  <Accordion title="Cache strategically">
+    Implement caching in repositories when appropriate, keeping it transparent to the Domain layer.
+  </Accordion>
+</AccordionGroup>
+
+## Common patterns
+
+<CardGroup cols={2}>
+  <Card title="Single source of truth" icon="database">
+    Repositories provide a unified API regardless of whether data comes from network, cache, or database
+  </Card>
+  
+  <Card title="Error translation" icon="language">
+    Convert technical errors (network, parsing) into business-friendly domain errors
+  </Card>
+  
+  <Card title="Reactive updates" icon="bolt">
+    Use Combine publishers to notify subscribers of state changes
+  </Card>
+  
+  <Card title="Composition" icon="layer-group">
+    Combine multiple data sources (network + cache) in a single repository
+  </Card>
+</CardGroup>

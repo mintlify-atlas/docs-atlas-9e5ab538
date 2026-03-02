@@ -1,0 +1,136 @@
+---
+title: DefaultUserRepository
+description: Implementation of UserRepository that coordinates authentication and session management in the data layer
+---
+
+## Overview
+
+`DefaultUserRepository` is the concrete implementation of the `UserRepository` protocol. It coordinates between the authentication client and user session to handle login/logout operations.
+
+## Type signature
+
+```swift
+public final class DefaultUserRepository: UserRepository
+```
+
+## Initializer
+
+### init(session:authClient:)
+
+Creates a new repository instance with the required dependencies.
+
+```swift
+public init(session: UserSession, authClient: AuthClient)
+```
+
+<ParamField path="session" type="UserSession" required>
+  The session manager responsible for storing user state
+</ParamField>
+
+<ParamField path="authClient" type="AuthClient" required>
+  The client that handles authentication network requests
+</ParamField>
+
+## Properties
+
+### loggedInPublisher
+
+A publisher that emits the current login state.
+
+```swift
+public var loggedInPublisher: AnyPublisher<Bool, Never>
+```
+
+This publisher forwards events from the underlying session's `isLoggedInPublisher`.
+
+## Methods
+
+### login(username:password:)
+
+Attempts to log in a user with the provided credentials.
+
+```swift
+@MainActor
+public func login(username: String, password: String) async -> Result<Void, LoginError>
+```
+
+<ParamField path="username" type="String" required>
+  The user's username
+</ParamField>
+
+<ParamField path="password" type="String" required>
+  The user's password
+</ParamField>
+
+**Returns:** A `Result` containing either success or a `LoginError`
+
+**Behavior:**
+- Calls the auth client to authenticate
+- On success, stores the user and token in the session
+- Maps `AuthClientError` to `LoginError`
+- Must be called from the main actor
+
+### logout()
+
+Logs out the current user.
+
+```swift
+@MainActor
+public func logout() async
+```
+
+**Behavior:**
+- Calls the auth client to perform server-side logout
+- Clears the local session regardless of server response
+- Must be called from the main actor
+
+## Usage example
+
+```swift
+import Combine
+import User
+
+let session = DefaultUserSession()
+let authClient = FakeAuthClient()
+let repository = DefaultUserRepository(
+    session: session,
+    authClient: authClient
+)
+
+// Subscribe to login state changes
+var cancellables = Set<AnyCancellable>()
+repository.loggedInPublisher
+    .sink { isLoggedIn in
+        print("User logged in: \(isLoggedIn)")
+    }
+    .store(in: &cancellables)
+
+// Perform login
+Task { @MainActor in
+    let result = await repository.login(
+        username: "john.doe",
+        password: "secretPassword"
+    )
+    
+    switch result {
+    case .success:
+        print("Login successful")
+    case .failure(let error):
+        print("Login failed: \(error)")
+    }
+}
+
+// Logout
+Task { @MainActor in
+    await repository.logout()
+    print("User logged out")
+}
+```
+
+## Error mapping
+
+The repository maps authentication errors from the data layer to domain layer errors:
+
+- `AuthClientError.invalidCredentials` → `LoginError.invalidCredentials`
+- `AuthClientError.networkFailure` → `LoginError.unknown`
+- `AuthClientError.unknown` → `LoginError.unknown`

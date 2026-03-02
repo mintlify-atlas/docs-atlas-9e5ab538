@@ -1,0 +1,359 @@
+---
+title: Feature DI containers
+description: Dependency injection containers for feature modules in the presentation layer
+---
+
+## Overview
+
+Feature DI containers are structs that encapsulate dependency construction and view factory methods for feature modules. Each UI feature module has its own DI container responsible for assembling ViewModels and Views with their required dependencies.
+
+## Pattern
+
+DI containers follow these principles:
+
+- Implemented as `public struct` types
+- Named with the pattern `{Feature}UIDI`
+- Receive external dependencies through constructor injection
+- Provide factory methods marked with `@MainActor` for ViewModels and Views
+- Encapsulate the creation of feature-specific screens
+
+## LoginUIDI
+
+Dependency injection container for the login feature.
+
+### Type signature
+
+```swift
+public struct LoginUIDI {
+    public init(userDI: UserDI)
+}
+```
+
+### Constructor parameters
+
+<ParamField path="userDI" type="UserDI" required>
+  Domain layer DI container providing user-related use cases like `UserLoginUseCase`.
+</ParamField>
+
+### Factory methods
+
+<ParamField path="makeLoginScreenViewModel()" type="@MainActor () -> LoginScreenViewModel">
+  Creates a `LoginScreenViewModel` instance with injected `UserLoginUseCase` from the domain layer.
+</ParamField>
+
+<ParamField path="loginView()" type="@MainActor () -> some View">
+  Creates a complete login screen view with a configured ViewModel. Returns an opaque SwiftUI View.
+</ParamField>
+
+### Usage example
+
+```swift
+import LoginUI
+import UserDI
+
+// Initialize with domain dependencies
+let userDI = UserDI()
+let loginDI = LoginUIDI(userDI: userDI)
+
+// Create ViewModel
+let viewModel = await loginDI.makeLoginScreenViewModel()
+
+// Or create complete view
+let loginScreen = await loginDI.loginView()
+```
+
+### Implementation
+
+```swift
+@MainActor
+public func makeLoginScreenViewModel() -> LoginScreenViewModel {
+    LoginScreenViewModel(userLogin: userDI.userLoginUseCase)
+}
+
+@MainActor
+public func loginView() -> some View {
+    LoginScreenView(viewModel: makeLoginScreenViewModel())
+}
+```
+
+Location: `LoginUI/Sources/DI/LoginUIDI.swift:12`
+
+## HomeUIDI
+
+Dependency injection container for the home feature.
+
+### Type signature
+
+```swift
+public struct HomeUIDI {
+    public init(navigation: HomeNavigation)
+}
+```
+
+### Constructor parameters
+
+<ParamField path="navigation" type="HomeNavigation" required>
+  Navigation protocol implementation for routing from the home feature to other screens.
+</ParamField>
+
+### Factory methods
+
+<ParamField path="mainView()" type="@MainActor () -> some View">
+  Creates the main home screen view with ViewModel and navigation configured.
+</ParamField>
+
+<ParamField path="detailView(id:)" type="@MainActor (UUID) -> some View">
+  Creates a home detail screen view for a specific item ID.
+</ParamField>
+
+### Usage example
+
+```swift
+import HomeUI
+
+let homeDI = HomeUIDI(navigation: homeNavigationImpl)
+
+// Create main screen
+let homeScreen = await homeDI.mainView()
+
+// Create detail screen
+let itemId = UUID()
+let detailScreen = await homeDI.detailView(id: itemId)
+```
+
+### Implementation
+
+```swift
+@MainActor
+public func mainView() -> some View {
+    HomeScreenView(
+        viewModel: HomeScreenViewModel(),
+        navigation: navigation
+    )
+}
+
+@MainActor
+public func detailView(id: UUID) -> some View {
+    HomeDetailScreenView(id: id)
+}
+```
+
+Location: `HomeUI/Sources/DI/HomeUIDI.swift:11`
+
+## CartUIDI
+
+Dependency injection container for the shopping cart feature.
+
+### Type signature
+
+```swift
+public struct CartUIDI {
+    public init(navigation: CartNavigation)
+}
+```
+
+### Constructor parameters
+
+<ParamField path="navigation" type="CartNavigation" required>
+  Navigation protocol implementation for routing from cart to other features.
+</ParamField>
+
+### Factory methods
+
+<ParamField path="mainView()" type="@MainActor () -> some View">
+  Creates the main cart screen view with ViewModel and navigation configured.
+</ParamField>
+
+<ParamField path="detailView(id:)" type="@MainActor (UUID) -> some View">
+  Creates a cart item detail screen for a specific item ID.
+</ParamField>
+
+### Usage example
+
+```swift
+import CartUI
+
+let cartDI = CartUIDI(navigation: cartNavigationImpl)
+
+// Create main screen
+let cartScreen = await cartDI.mainView()
+
+// Create detail screen
+let itemId = UUID()
+let detailScreen = await cartDI.detailView(id: itemId)
+```
+
+### Implementation
+
+```swift
+@MainActor
+public func mainView() -> some View {
+    CartScreenView(
+        viewModel: CartScreenViewModel(),
+        navigation: navigation
+    )
+}
+
+@MainActor
+public func detailView(id: UUID) -> some View {
+    CartDetailScreenView(id: id)
+}
+```
+
+Location: `CartUI/Sources/DI/CartUIDI.swift:11`
+
+## WishlistUIDI
+
+Dependency injection container for the wishlist feature.
+
+### Type signature
+
+```swift
+public struct WishlistUIDI {
+    public init(navigation: WishlistNavigation)
+}
+```
+
+### Constructor parameters
+
+<ParamField path="navigation" type="WishlistNavigation" required>
+  Navigation protocol implementation for routing from wishlist to other features.
+</ParamField>
+
+### Factory methods
+
+<ParamField path="mainView()" type="@MainActor () -> some View">
+  Creates the main wishlist screen view with ViewModel and navigation configured.
+</ParamField>
+
+<ParamField path="detailView(id:)" type="@MainActor (UUID) -> some View">
+  Creates a wishlist item detail screen for a specific item ID with navigation support.
+</ParamField>
+
+### Usage example
+
+```swift
+import WishlistUI
+
+let wishlistDI = WishlistUIDI(navigation: wishlistNavigationImpl)
+
+// Create main screen
+let wishlistScreen = await wishlistDI.mainView()
+
+// Create detail screen
+let itemId = UUID()
+let detailScreen = await wishlistDI.detailView(id: itemId)
+```
+
+### Implementation
+
+```swift
+@MainActor
+public func mainView() -> some View {
+    WishlistScreenView(
+        viewModel: WishlistScreenViewModel(),
+        navigation: navigation
+    )
+}
+
+@MainActor
+public func detailView(id: UUID) -> some View {
+    WishlistDetailScreenView(id: id, navigation: navigation)
+}
+```
+
+Location: `WishlistUI/Sources/DI/WishlistUIDI.swift:12`
+
+## Domain DI example: UserDI
+
+For reference, here's how domain-layer DI containers are structured:
+
+### Type signature
+
+```swift
+public struct UserDI {
+    @MainActor
+    public init(
+        userSession: UserSession = DefaultUserSession(),
+        authClient: AuthClient = FakeAuthClient()
+    )
+}
+```
+
+### Public use cases
+
+<ParamField path="userLoginUseCase" type="UserLoginUseCase">
+  Use case for authenticating users with username and password.
+</ParamField>
+
+<ParamField path="userIsLoggedInUseCase" type="UserIsLoggedInUseCase">
+  Use case for checking current authentication status.
+</ParamField>
+
+<ParamField path="observeUserIsLoggedInUseCase" type="ObserveUserIsLoggedInUseCase">
+  Use case for observing authentication status changes reactively.
+</ParamField>
+
+### Usage example
+
+```swift
+import User
+import UserData
+
+let userDI = await UserDI(
+    userSession: DefaultUserSession(),
+    authClient: FakeAuthClient()
+)
+
+// Access use cases
+let loginUseCase = userDI.userLoginUseCase
+let isLoggedIn = userDI.userIsLoggedInUseCase
+```
+
+Location: `User/Sources/DI/UserDI.swift:12`
+
+## Architecture principles
+
+### Dependency hierarchy
+
+DI containers follow a clear dependency flow:
+
+1. Data layer DI (e.g., data sources, clients)
+2. Domain layer DI (e.g., UserDI with repositories and use cases)
+3. Presentation layer DI (e.g., LoginUIDI with ViewModels and Views)
+
+### Constructor injection
+
+All dependencies are passed through constructors, making the dependency graph explicit:
+
+```swift
+public init(userDI: UserDI) {
+    self.userDI = userDI
+}
+```
+
+### Factory pattern
+
+DI containers use factory methods instead of exposing dependencies directly:
+
+```swift
+@MainActor
+public func makeLoginScreenViewModel() -> LoginScreenViewModel {
+    LoginScreenViewModel(userLogin: userDI.userLoginUseCase)
+}
+```
+
+### MainActor isolation
+
+Factory methods that create UI components are marked with `@MainActor` to ensure proper thread safety:
+
+```swift
+@MainActor
+public func mainView() -> some View {
+    // Safe to create View and ViewModel on main thread
+}
+```
+
+### Feature isolation
+
+Each feature module has its own DI container, preventing cross-feature dependencies and maintaining modular boundaries.

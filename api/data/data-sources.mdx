@@ -1,0 +1,215 @@
+---
+title: Authentication data sources
+description: AuthClient protocol and implementations for handling authentication network requests
+---
+
+## AuthClient protocol
+
+The `AuthClient` protocol defines the interface for authentication network operations.
+
+### Type signature
+
+```swift
+public protocol AuthClient: Sendable
+```
+
+### Methods
+
+#### login(username:password:)
+
+Authenticates a user with their credentials.
+
+```swift
+func login(username: String, password: String) async -> Result<(User, AuthToken), AuthClientError>
+```
+
+<ParamField path="username" type="String" required>
+  The user's username
+</ParamField>
+
+<ParamField path="password" type="String" required>
+  The user's password
+</ParamField>
+
+**Returns:** A `Result` containing either a tuple of `(User, AuthToken)` on success or an `AuthClientError` on failure
+
+#### logout()
+
+Performs server-side logout.
+
+```swift
+func logout() async -> Result<Void, AuthClientError>
+```
+
+**Returns:** A `Result` indicating success or an `AuthClientError`
+
+## AuthClientError
+
+Errors that can occur during authentication operations.
+
+```swift
+public enum AuthClientError: Error, Equatable {
+    case invalidCredentials
+    case networkFailure
+    case unknown
+}
+```
+
+### Cases
+
+- **invalidCredentials** - The provided username or password is incorrect
+- **networkFailure** - A network error occurred during the request
+- **unknown** - An unexpected error occurred
+
+## FakeAuthClient
+
+A test implementation of `AuthClient` for development and testing.
+
+### Type signature
+
+```swift
+public actor FakeAuthClient: AuthClient
+```
+
+### Initializer
+
+```swift
+public init(
+    lastLoginToken: AuthToken? = nil,
+    exampleExpiry: TimeInterval = 60
+)
+```
+
+<ParamField path="lastLoginToken" type="AuthToken?" default="nil">
+  Optional initial token value
+</ParamField>
+
+<ParamField path="exampleExpiry" type="TimeInterval" default="60">
+  Token expiration time in seconds from login
+</ParamField>
+
+### Properties
+
+#### lastLoginToken
+
+The most recently generated authentication token.
+
+```swift
+public private(set) var lastLoginToken: AuthToken?
+```
+
+#### exampleExpiry
+
+The expiration duration for generated tokens.
+
+```swift
+public private(set) var exampleExpiry: TimeInterval
+```
+
+### Behavior
+
+**Login:**
+- Simulates a 500ms network delay
+- Rejects credentials where username is "test" and password is "test"
+- Rejects empty username or password
+- Generates a random UUID token with configured expiry
+- Returns a `User` with a new UUID and the provided username
+
+**Logout:**
+- Simulates a 500ms network delay
+- Clears the `lastLoginToken`
+- Always succeeds
+
+## Usage example
+
+```swift
+import User
+
+// Create a fake client for testing
+let authClient = FakeAuthClient(exampleExpiry: 3600)
+
+// Perform login
+let result = await authClient.login(
+    username: "john.doe",
+    password: "password123"
+)
+
+switch result {
+case .success(let (user, token)):
+    print("Logged in as: \(user.username)")
+    print("Token: \(token.value)")
+    print("Expires at: \(token.expiresAt)")
+    
+case .failure(let error):
+    switch error {
+    case .invalidCredentials:
+        print("Invalid username or password")
+    case .networkFailure:
+        print("Network connection failed")
+    case .unknown:
+        print("An unexpected error occurred")
+    }
+}
+
+// Check last token
+let lastToken = await authClient.lastLoginToken
+print("Last token: \(lastToken?.value ?? "none")")
+
+// Perform logout
+let logoutResult = await authClient.logout()
+if case .success = logoutResult {
+    print("Logged out successfully")
+}
+```
+
+## AuthToken
+
+Represents an authentication token with expiration.
+
+### Type signature
+
+```swift
+public struct AuthToken: Equatable, Sendable
+```
+
+### Initializer
+
+```swift
+public init(value: String, expiresAt: Date)
+```
+
+<ParamField path="value" type="String" required>
+  The token string value
+</ParamField>
+
+<ParamField path="expiresAt" type="Date" required>
+  The date and time when the token expires
+</ParamField>
+
+### Properties
+
+#### value
+
+The token string.
+
+```swift
+public let value: String
+```
+
+#### expiresAt
+
+The expiration date of the token.
+
+```swift
+public let expiresAt: Date
+```
+
+#### isExpired
+
+Indicates whether the token has expired.
+
+```swift
+public var isExpired: Bool
+```
+
+Returns `true` if the current date is greater than or equal to `expiresAt`.

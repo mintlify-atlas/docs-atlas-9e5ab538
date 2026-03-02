@@ -1,0 +1,281 @@
+---
+title: Architecture overview
+description: High-level overview of the Clean Architecture implementation in this iOS framework
+---
+
+## Introduction
+
+This iOS framework implements Clean Architecture as described by Robert C. Martin (Uncle Bob), organizing code into distinct layers with unidirectional dependencies. The architecture ensures that business logic remains independent of frameworks, UI, and external data sources.
+
+<Info>
+Clean Architecture enables independent testing of each layer, framework independence, and the ability to defer infrastructure decisions.
+</Info>
+
+## Core principles
+
+The architecture is built on three fundamental principles:
+
+### 1. Separation of concerns
+
+Each layer has a specific responsibility and contains code related only to that concern. This makes the codebase easier to understand, maintain, and test.
+
+### 2. Dependency inversion
+
+Outer layers depend on inner layers, never the reverse. This is achieved through protocol-based abstractions defined in the inner layers.
+
+### 3. Framework independence
+
+Business logic has zero dependencies on UI frameworks, databases, or external services. The core domain can be extracted and reused across platforms.
+
+## Architecture diagram
+
+The architecture consists of four distinct layers arranged in concentric circles:
+
+```
+┌─────────────────────────────────────┐
+│     Application Layer                │ ← Composition Root
+│  (iPhone/Injector, Navigator)       │   Wires everything together
+├─────────────────────────────────────┤
+│     Presentation Layer              │ ← UI & ViewModels
+│  (FeatureUI modules)                 │   SwiftUI Views & ViewModels
+├─────────────────────────────────────┤
+│     Domain Layer                    │ ← Business Logic (Core)
+│  (User/User module)                 │   Entities, Use Cases, Contracts
+├─────────────────────────────────────┤
+│     Data Layer                      │ ← External Interfaces
+│  (User/UserData module)             │   Repositories, Data Sources
+└─────────────────────────────────────┘
+```
+
+<Note>
+Dependencies point **inward**. The Domain layer has no dependencies on any other layer, making it the most stable and reusable part of the system.
+</Note>
+
+## Layer responsibilities
+
+### Domain layer (innermost)
+
+The domain layer contains pure business logic with **zero framework dependencies**:
+
+- **Entities**: Core business objects (e.g., `User`, `Product`)
+- **Use cases**: Single-purpose business operations (e.g., `UserLoginUseCase`)
+- **Repository contracts**: Abstract interfaces for data access (e.g., `UserRepository`)
+
+```swift User/Sources/Domain/Model/User.swift
+public struct User: Equatable, Sendable {
+    public let id: UUID
+    public let username: String
+
+    public init(id: UUID, username: String) {
+        self.id = id
+        self.username = username
+    }
+}
+```
+
+### Data layer
+
+The data layer implements repository contracts and handles all external data concerns:
+
+- **Repository implementations**: Concrete implementations of domain contracts
+- **Data sources**: API clients, database handlers, session managers
+- **DTOs**: Data transfer objects for external systems
+- **Error mapping**: Translates external errors to domain errors
+
+```swift User/Sources/Data/DefaultUserRepository.swift
+public final class DefaultUserRepository: UserRepository {
+    private let session: UserSession
+    private let authClient: AuthClient
+
+    @MainActor
+    public func login(username: String, password: String) async -> Result<Void, LoginError> {
+        let result = await authClient.login(username: username, password: password)
+        switch result {
+        case let .success((user, token)):
+            session.setUser(user, token: token)
+            return .success(())
+        case .failure(let error):
+            return .failure(mapAuthClientErrorToLoginError(error))
+        }
+    }
+}
+```
+
+### Presentation layer
+
+The presentation layer handles user interface and interactions using MVVM:
+
+- **Views**: SwiftUI views that display data and capture user input
+- **ViewModels**: Observable classes managing UI state and coordinating with use cases
+- **Navigation protocols**: Define navigation requirements for each feature
+- **Feature DI containers**: Create and wire up feature-specific dependencies
+
+```swift LoginUI/Sources/UI/LoginScreen/LoginScreenViewModel.swift
+@MainActor
+public final class LoginScreenViewModel: ObservableObject {
+    private let userLogin: UserLoginUseCase
+
+    @Published var username: String = ""
+    @Published var password: String = ""
+    @Published var isLoading: Bool = false
+    @Published var error: String?
+
+    func login() async {
+        isLoading = true
+        defer { isLoading = false }
+        error = nil
+
+        let result = await userLogin.execute(username: username, password: password)
+        switch result {
+        case .success:
+            break
+        case .failure(let loginError):
+            self.error = mapLoginErrorToMessage(loginError)
+        }
+    }
+}
+```
+
+### Application layer (outermost)
+
+The application layer is the composition root that wires everything together:
+
+- **Dependency injection**: Creates and connects all components
+- **Navigation coordination**: Manages app-level navigation and routing
+- **App entry point**: Initializes the application
+
+```swift iPhone/Injector.swift
+@MainActor
+final class Injector {
+    static let shared = Injector()
+    
+    let userDI: UserDI
+    let navigator: Navigator
+    let loginUIDI: LoginUIDI
+    let homeUIDI: HomeUIDI
+    let wishlistUIDI: WishlistUIDI
+    let cartUIDI: CartUIDI
+
+    private init() {
+        navigator = Navigator()
+        userDI = UserDI()
+        loginUIDI = LoginUIDI(userDI: userDI)
+        homeUIDI = HomeUIDI(navigation: navigator)
+        wishlistUIDI = WishlistUIDI(navigation: navigator)
+        cartUIDI = CartUIDI(navigation: navigator)
+    }
+}
+```
+
+## Module structure
+
+The project is organized into Swift Package Manager modules:
+
+```
+├── User/                    # Domain & Data layer
+│   ├── Sources/
+│   │   ├── Domain/         # Entities, use cases, repository contracts
+│   │   ├── Data/           # Repository implementations, data sources
+│   │   └── DI/             # Dependency injection for User module
+│   └── Tests/
+├── LoginUI/                # Login feature module
+│   ├── Sources/
+│   │   ├── UI/            # Views and ViewModels
+│   │   ├── Navigation/    # Navigation protocol
+│   │   └── DI/            # Feature DI container
+│   └── Tests/
+├── HomeUI/                 # Home feature module
+├── WishlistUI/             # Wishlist feature module
+├── CartUI/                 # Cart feature module
+└── iPhone/                 # Application layer (composition root)
+    ├── Injector.swift      # Dependency injection container
+    ├── Navigator.swift     # Navigation coordinator
+    └── Main.swift          # App entry point
+```
+
+<Warning>
+Each module should only import modules from the same layer or inner layers. Never import from outer layers.
+</Warning>
+
+## Module dependencies
+
+```
+iPhone (App)
+├── UserDI
+│   ├── User (Domain)
+│   └── UserData
+│       └── User (Domain)
+├── LoginUIDI
+│   ├── LoginUI
+│   └── UserDI
+├── HomeUIDI
+│   └── HomeUI
+├── WishlistUIDI
+│   └── WishlistUI
+└── CartUIDI
+    └── CartUI
+```
+
+## Data flow example
+
+Here's how a user login flows through the layers:
+
+1. **User taps login button** → `LoginScreenView` captures tap
+2. **View delegates to ViewModel** → `LoginScreenViewModel.login()` called
+3. **ViewModel calls use case** → `UserLoginUseCase.execute()` with credentials
+4. **Use case validates input** → Checks for empty username/password
+5. **Use case delegates to repository** → `UserRepository.login()` called
+6. **Repository calls data source** → `AuthClient.login()` makes API call
+7. **Repository maps response** → Converts `AuthClientError` to `LoginError`
+8. **Repository updates session** → Stores user and token in `UserSession`
+9. **Use case returns result** → Success or failure propagates up
+10. **ViewModel updates UI state** → Sets `isLoading`, `error`, etc.
+11. **View re-renders** → SwiftUI observes ViewModel changes
+
+<Info>
+Notice how each layer has a single, well-defined responsibility, and dependencies flow inward toward the domain.
+</Info>
+
+## Key benefits
+
+### Testability
+
+Each layer can be tested in isolation:
+- **Domain**: Test use cases with mock repositories
+- **Data**: Test repositories with mock data sources
+- **Presentation**: Test ViewModels with mock use cases
+
+### Maintainability
+
+Clear boundaries make it easy to:
+- Locate code responsible for specific functionality
+- Make changes without affecting other layers
+- Understand the system structure
+
+### Scalability
+
+Well-defined patterns enable:
+- Adding new features following established conventions
+- Reusing domain logic across features
+- Parallel development across teams
+
+### Platform independence
+
+The domain layer can be:
+- Shared across iOS, macOS, watchOS, and tvOS
+- Extracted into a separate package
+- Reused in non-Apple platforms (with alternative frameworks)
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Layer details" icon="layer-group" href="/architecture/layers">
+    Deep dive into each layer's responsibilities and implementation patterns
+  </Card>
+  <Card title="Dependency rule" icon="arrow-right" href="/architecture/dependency-rule">
+    Learn about the dependency rule and how it enforces clean architecture
+  </Card>
+  <Card title="SOLID principles" icon="cube" href="/architecture/solid-principles">
+    See how SOLID principles are applied throughout the codebase
+  </Card>
+</CardGroup>

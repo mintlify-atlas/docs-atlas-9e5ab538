@@ -1,0 +1,327 @@
+---
+title: Views
+description: SwiftUI View pattern implementation for declarative UI components in the presentation layer
+---
+
+## Overview
+
+Views in this architecture are SwiftUI structs that conform to the `View` protocol. They follow a strict separation of concerns by delegating business logic to ViewModels and navigation to Navigation protocols.
+
+## Base pattern
+
+Views are implemented as `public struct` types that:
+
+- Conform to SwiftUI's `View` protocol
+- Observe ViewModels using `@ObservedObject`
+- Receive dependencies through constructor injection
+- Handle navigation through injected navigation protocols
+- Contain only UI layout and presentation logic
+
+## LoginScreenView
+
+Authentication screen with username/password inputs and login action.
+
+### Type signature
+
+```swift
+public struct LoginScreenView: View {
+    public init(viewModel: LoginScreenViewModel)
+}
+```
+
+### Parameters
+
+<ParamField path="viewModel" type="LoginScreenViewModel" required>
+  The ViewModel managing authentication state and login logic. Observed for reactive updates.
+</ParamField>
+
+### Usage example
+
+```swift
+import SwiftUI
+
+let viewModel = LoginScreenViewModel(userLogin: userDI.userLoginUseCase)
+let view = LoginScreenView(viewModel: viewModel)
+```
+
+### Implementation
+
+```swift
+public var body: some View {
+    VStack(spacing: 20) {
+        TextField("Username", text: $viewModel.username)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled(true)
+        SecureField("Password", text: $viewModel.password)
+        if viewModel.isLoading {
+            ProgressView()
+        } else {
+            Button("Login") {
+                Task {
+                    await viewModel.login()
+                }
+            }
+        }
+        if let error = viewModel.error {
+            Text(error).foregroundColor(.red)
+        }
+    }
+    .padding()
+}
+```
+
+Location: `LoginUI/Sources/UI/LoginScreen/LoginScreenView.swift:10`
+
+## HomeScreenView
+
+Main home screen with navigation to home details and wishlist.
+
+### Type signature
+
+```swift
+public struct HomeScreenView: View {
+    public init(viewModel: HomeScreenViewModel, navigation: HomeNavigation)
+}
+```
+
+### Parameters
+
+<ParamField path="viewModel" type="HomeScreenViewModel" required>
+  The ViewModel managing home screen business logic. Observed for reactive updates.
+</ParamField>
+
+<ParamField path="navigation" type="HomeNavigation" required>
+  Navigation protocol for routing to other screens. Handles cross-feature navigation.
+</ParamField>
+
+### Usage example
+
+```swift
+let viewModel = HomeScreenViewModel()
+let view = HomeScreenView(
+    viewModel: viewModel,
+    navigation: homeNavigation
+)
+```
+
+### Navigation integration
+
+```swift
+Button("Open Home Detail") {
+    let id = UUID()
+    viewModel.didSelectHomeDetail(id: id)
+    navigation.openHomeDetail(id: id)
+}
+
+Button("Go to Wishlist Detail") {
+    let id = UUID()
+    viewModel.didSelectGoToWishlist(id: id)
+    navigation.openWishlistDetail(id: id)
+}
+```
+
+Location: `HomeUI/Sources/UI/HomeScreen/HomeScreenView.swift:11`
+
+## CartScreenView
+
+Shopping cart screen with item management and navigation.
+
+### Type signature
+
+```swift
+public struct CartScreenView: View {
+    public init(viewModel: CartScreenViewModel, navigation: CartNavigation)
+}
+```
+
+### Parameters
+
+<ParamField path="viewModel" type="CartScreenViewModel" required>
+  The ViewModel managing cart screen state and business logic.
+</ParamField>
+
+<ParamField path="navigation" type="CartNavigation" required>
+  Navigation protocol for routing to cart details and other features.
+</ParamField>
+
+### Usage example
+
+```swift
+let viewModel = CartScreenViewModel()
+let view = CartScreenView(
+    viewModel: viewModel,
+    navigation: cartNavigation
+)
+```
+
+### Implementation
+
+```swift
+public var body: some View {
+    VStack {
+        Text("Cart")
+        Button("Open Cart Detail") {
+            let id = UUID()
+            viewModel.didSelectCartDetail(id: id)
+            navigation.openCartDetail(id: id)
+        }
+        Button("Go to Home Detail") {
+            let id = UUID()
+            viewModel.didSelectGoToHomeDetail(id: id)
+            navigation.openHomeDetail(id: id)
+        }
+    }
+}
+```
+
+Location: `CartUI/Sources/UI/CartScreen/CartScreenView.swift:10`
+
+## WishlistScreenView
+
+Wishlist management screen with item navigation.
+
+### Type signature
+
+```swift
+public struct WishlistScreenView: View {
+    public init(viewModel: WishlistScreenViewModel, navigation: WishlistNavigation)
+}
+```
+
+### Parameters
+
+<ParamField path="viewModel" type="WishlistScreenViewModel" required>
+  The ViewModel managing wishlist screen state.
+</ParamField>
+
+<ParamField path="navigation" type="WishlistNavigation" required>
+  Navigation protocol for routing to wishlist details and cart.
+</ParamField>
+
+### Usage example
+
+```swift
+let viewModel = WishlistScreenViewModel()
+let view = WishlistScreenView(
+    viewModel: viewModel,
+    navigation: wishlistNavigation
+)
+```
+
+Location: `WishlistUI/Sources/UI/WishlistScreen/WishlistScreenView.swift:10`
+
+## Detail views
+
+### HomeDetailScreenView
+
+Detail view for a specific home item.
+
+```swift
+public struct HomeDetailScreenView: View {
+    public init(id: UUID)
+}
+```
+
+<ParamField path="id" type="UUID" required>
+  Unique identifier for the home item to display.
+</ParamField>
+
+Location: `HomeUI/Sources/UI/HomeDetails/HomeDetailScreenView.swift:11`
+
+### CartDetailScreenView
+
+Detail view for a specific cart item.
+
+```swift
+public struct CartDetailScreenView: View {
+    public init(id: UUID)
+}
+```
+
+<ParamField path="id" type="UUID" required>
+  Unique identifier for the cart item to display.
+</ParamField>
+
+Location: `CartUI/Sources/UI/CartDetails/CartDetailScreenView.swift:11`
+
+### WishlistDetailScreenView
+
+Detail view for a specific wishlist item with navigation support.
+
+```swift
+public struct WishlistDetailScreenView: View {
+    public init(id: UUID, navigation: WishlistNavigation)
+}
+```
+
+<ParamField path="id" type="UUID" required>
+  Unique identifier for the wishlist item to display.
+</ParamField>
+
+<ParamField path="navigation" type="WishlistNavigation" required>
+  Navigation protocol for cross-feature navigation from detail view.
+</ParamField>
+
+Location: `WishlistUI/Sources/UI/WishlistDetail/WishlistDetailScreenView.swift:10`
+
+## Navigation protocols
+
+Navigation is handled through protocol injection to maintain loose coupling between features.
+
+### HomeNavigation
+
+```swift
+public protocol HomeNavigation: AnyObject {
+    func openHomeDetail(id: UUID)
+    func openWishlistDetail(id: UUID)
+}
+```
+
+### CartNavigation
+
+```swift
+public protocol CartNavigation: AnyObject {
+    func openCartDetail(id: UUID)
+    func openHomeDetail(id: UUID)
+}
+```
+
+### WishlistNavigation
+
+```swift
+public protocol WishlistNavigation: AnyObject {
+    func openWishlistDetail(id: UUID)
+    func openCartDetail(id: UUID)
+}
+```
+
+## Architecture principles
+
+### Unidirectional data flow
+
+Views observe ViewModels and react to state changes. User actions are sent to ViewModels as method calls:
+
+```swift
+Button("Action") {
+    viewModel.handleAction()
+}
+```
+
+### Dependency injection
+
+All dependencies are injected through the initializer:
+
+```swift
+public init(viewModel: ViewModel, navigation: Navigation) {
+    self.viewModel = viewModel
+    self.navigation = navigation
+}
+```
+
+### Protocol-based navigation
+
+Navigation is abstracted behind protocols, allowing features to navigate without direct dependencies on other features:
+
+```swift
+navigation.openCartDetail(id: id)  // Protocol method, implementation in coordinator
+```

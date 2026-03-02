@@ -1,0 +1,732 @@
+---
+title: SOLID principles
+description: How SOLID principles are applied throughout the Clean Architecture implementation
+---
+
+## Introduction
+
+SOLID principles are five design principles that make software designs more maintainable, flexible, and scalable. This framework applies all five principles throughout its architecture.
+
+<Info>
+SOLID is an acronym: **S**ingle Responsibility, **O**pen/Closed, **L**iskov Substitution, **I**nterface Segregation, **D**ependency Inversion.
+</Info>
+
+## Single Responsibility Principle (SRP)
+
+> A class should have one, and only one, reason to change.
+
+Each component in the architecture has a single, well-defined responsibility.
+
+### Use cases
+
+Each use case represents **one** business operation:
+
+```swift User/Sources/Domain/UseCases/UserLoginUseCase.swift
+// ✅ Single responsibility: Handle user login
+public protocol UserLoginUseCase {
+    func execute(username: String, password: String) async -> Result<Void, LoginError>
+}
+
+public struct DefaultUserLoginUseCase: UserLoginUseCase {
+    let userRepository: UserRepository
+
+    public func execute(username: String, password: String) async -> Result<Void, LoginError> {
+        // Validation
+        if username.isEmpty {
+            return .failure(.usernameIsEmpty)
+        }
+        if password.isEmpty {
+            return .failure(.passwordIsEmpty)
+        }
+        
+        // Delegate to repository
+        return await userRepository.login(username: username, password: password)
+    }
+}
+```
+
+**Separate use cases for separate operations:**
+
+```swift User/Sources/Domain/UseCases/UserIsLoggedInUseCase.swift
+// ✅ Single responsibility: Check login state
+public protocol UserIsLoggedInUseCase {
+    func execute() async -> Bool
+}
+```
+
+```swift User/Sources/Domain/UseCases/ObserveUserIsLoggedInUseCase.swift
+// ✅ Single responsibility: Observe login state changes
+public protocol ObserveUserIsLoggedInUseCase {
+    func execute() -> AnyPublisher<Bool, Never>
+}
+```
+
+<Note>
+Each use case has **one reason to change**: when the business rules for that specific operation change.
+</Note>
+
+### Data sources
+
+Each data source handles **one** type of data:
+
+```swift User/Sources/Data/Auth/AuthClient.swift
+// ✅ Single responsibility: Handle authentication API calls
+public protocol AuthClient: Sendable {
+    func login(username: String, password: String) async -> Result<(User, AuthToken), AuthClientError>
+    func logout() async -> Result<Void, AuthClientError>
+}
+```
+
+```swift User/Sources/Data/Session/UserSession.swift
+// ✅ Single responsibility: Manage user session state
+@MainActor
+public protocol UserSession: AnyObject {
+    var user: User? { get }
+    var authToken: AuthToken? { get }
+    var isLoggedInPublisher: AnyPublisher<Bool, Never> { get }
+    func setUser(_ user: User, token: AuthToken)
+    func clear()
+}
+```
+
+### ViewModels
+
+Each ViewModel manages state for **one** screen:
+
+```swift LoginUI/Sources/UI/LoginScreen/LoginScreenViewModel.swift
+// ✅ Single responsibility: Manage login screen state
+@MainActor
+public final class LoginScreenViewModel: ObservableObject {
+    private let userLogin: UserLoginUseCase
+
+    @Published var username: String = ""
+    @Published var password: String = ""
+    @Published var isLoading: Bool = false
+    @Published var error: String?
+
+    func login() async {
+        // Handle login action
+    }
+}
+```
+
+**Counter-example (violates SRP):**
+
+```swift
+// ❌ Multiple responsibilities: login, profile, settings
+class UserViewModel {
+    func login() { ... }
+    func updateProfile() { ... }
+    func changeSettings() { ... }
+    func logout() { ... }
+}
+```
+
+## Open/Closed Principle (OCP)
+
+> Software entities should be open for extension, but closed for modification.
+
+The architecture uses **protocols** to enable extension without modification.
+
+### Repository contracts
+
+New repository implementations can be added without modifying existing code:
+
+```swift User/Sources/Domain/Repository/UserRepository.swift
+// ✅ Protocol is closed for modification
+public protocol UserRepository {
+    var loggedInPublisher: AnyPublisher<Bool, Never> { get }
+    func login(username: String, password: String) async -> Result<Void, LoginError>
+    func logout() async
+}
+```
+
+**Multiple implementations:**
+
+```swift User/Sources/Data/DefaultUserRepository.swift
+// ✅ Real implementation
+public final class DefaultUserRepository: UserRepository {
+    private let session: UserSession
+    private let authClient: AuthClient
+    // ...
+}
+```
+
+```swift
+// ✅ Mock implementation for testing
+public final class MockUserRepository: UserRepository {
+    var loginResult: Result<Void, LoginError> = .success(())
+    
+    public func login(username: String, password: String) async -> Result<Void, LoginError> {
+        return loginResult
+    }
+}
+```
+
+```swift
+// ✅ Fake implementation with in-memory storage
+public final class FakeUserRepository: UserRepository {
+    private var users: [String: User] = [:]
+    // ...
+}
+```
+
+<Info>
+New implementations extend functionality **without modifying** the protocol or existing implementations.
+</Info>
+
+### Use case protocols
+
+New use case implementations can be added for different contexts:
+
+```swift
+// ✅ Production implementation
+public struct DefaultUserLoginUseCase: UserLoginUseCase {
+    let userRepository: UserRepository
+    
+    public func execute(username: String, password: String) async -> Result<Void, LoginError> {
+        // Full validation and repository call
+    }
+}
+```
+
+```swift
+// ✅ Testing implementation
+public struct MockUserLoginUseCase: UserLoginUseCase {
+    var result: Result<Void, LoginError> = .success(())
+    
+    public func execute(username: String, password: String) async -> Result<Void, LoginError> {
+        return result
+    }
+}
+```
+
+### Navigation protocols
+
+Features define their navigation needs, and different navigators can be implemented:
+
+```swift HomeUI/Sources/Navigation/HomeNavigation.swift
+// ✅ Protocol defines requirements
+public protocol HomeNavigation: AnyObject {
+    func openHomeDetail(id: UUID)
+    func openWishlistDetail(id: UUID)
+}
+```
+
+```swift iPhone/Navigation/Destination.swift
+// ✅ Production implementation using Navigator
+extension Navigator: HomeNavigation {
+    func openHomeDetail(id: UUID) {
+        push(Destination.homeDetail(id: id))
+    }
+    
+    func openWishlistDetail(id: UUID) {
+        push(Destination.wishlistDetail(id: id))
+    }
+}
+```
+
+```swift
+// ✅ Mock implementation for testing
+class MockHomeNavigation: HomeNavigation {
+    var openedDetailID: UUID?
+    
+    func openHomeDetail(id: UUID) {
+        openedDetailID = id
+    }
+    
+    func openWishlistDetail(id: UUID) {
+        openedDetailID = id
+    }
+}
+```
+
+## Liskov Substitution Principle (LSP)
+
+> Objects should be replaceable with instances of their subtypes without affecting correctness.
+
+Any implementation of a protocol should be substitutable for another implementation.
+
+### Repository substitution
+
+```swift
+// All implementations are substitutable
+let repository: UserRepository = DefaultUserRepository(...)
+let repository: UserRepository = MockUserRepository(...)
+let repository: UserRepository = FakeUserRepository(...)
+
+// Use case works with any implementation
+let useCase = DefaultUserLoginUseCase(userRepository: repository)
+```
+
+### Use case substitution
+
+```swift LoginUI/Sources/UI/LoginScreen/LoginScreenViewModel.swift
+// ViewModel works with any UserLoginUseCase implementation
+public final class LoginScreenViewModel: ObservableObject {
+    private let userLogin: UserLoginUseCase  // Any implementation works
+    
+    // Production
+    let viewModel = LoginScreenViewModel(userLogin: DefaultUserLoginUseCase(...))
+    
+    // Testing
+    let viewModel = LoginScreenViewModel(userLogin: MockUserLoginUseCase(...))
+}
+```
+
+### Navigation substitution
+
+```swift HomeUI/Sources/DI/HomeUIDI.swift
+// HomeUIDI works with any HomeNavigation implementation
+public struct HomeUIDI {
+    private let navigation: HomeNavigation
+    
+    // Production
+    let homeUI = HomeUIDI(navigation: navigator)
+    
+    // Testing
+    let homeUI = HomeUIDI(navigation: mockNavigation)
+}
+```
+
+<Warning>
+Implementations must honor the **contract** defined by the protocol. Don't add preconditions that the protocol doesn't specify.
+</Warning>
+
+**Example of LSP violation:**
+
+```swift
+// ❌ Violates LSP: adds precondition not in protocol
+class StrictUserRepository: UserRepository {
+    func login(username: String, password: String) async -> Result<Void, LoginError> {
+        precondition(username.count >= 5, "Username must be at least 5 characters")
+        // ...
+    }
+}
+```
+
+This violates LSP because the protocol doesn't specify a minimum username length. Code using `UserRepository` might break when using `StrictUserRepository`.
+
+## Interface Segregation Principle (ISP)
+
+> Clients should not be forced to depend on interfaces they don't use.
+
+The architecture uses **focused protocols** that define only what clients need.
+
+### Focused repository contracts
+
+Instead of one large repository:
+
+```swift
+// ❌ Violates ISP: one protocol for everything
+protocol UserRepository {
+    func login(...)
+    func logout()
+    func getProfile(...)
+    func updateProfile(...)
+    func changePassword(...)
+    func deleteAccount(...)
+    func uploadAvatar(...)
+    func getFriends(...)
+}
+```
+
+Use multiple focused protocols:
+
+```swift
+// ✅ Follows ISP: focused protocols
+protocol UserAuthRepository {
+    func login(username: String, password: String) async -> Result<Void, LoginError>
+    func logout() async
+}
+
+protocol UserProfileRepository {
+    func getProfile(id: UUID) async -> Result<UserProfile, Error>
+    func updateProfile(profile: UserProfile) async -> Result<Void, Error>
+}
+
+protocol UserFriendsRepository {
+    func getFriends(for userID: UUID) async -> Result<[User], Error>
+}
+```
+
+### Focused use cases
+
+Each use case protocol defines **one** operation:
+
+```swift
+// ✅ Focused use case: one method
+public protocol UserLoginUseCase {
+    func execute(username: String, password: String) async -> Result<Void, LoginError>
+}
+
+// ✅ Focused use case: one method
+public protocol UserIsLoggedInUseCase {
+    func execute() async -> Bool
+}
+
+// ✅ Focused use case: one method
+public protocol ObserveUserIsLoggedInUseCase {
+    func execute() -> AnyPublisher<Bool, Never>
+}
+```
+
+### Focused navigation protocols
+
+Each feature defines only the navigation it needs:
+
+```swift HomeUI/Sources/Navigation/HomeNavigation.swift
+// ✅ Home feature only needs these two navigation methods
+public protocol HomeNavigation: AnyObject {
+    func openHomeDetail(id: UUID)
+    func openWishlistDetail(id: UUID)
+}
+```
+
+```swift WishlistUI/Sources/Navigation/WishlistNavigation.swift
+// ✅ Wishlist feature only needs these navigation methods
+public protocol WishlistNavigation: AnyObject {
+    func openWishlistDetail(id: UUID)
+}
+```
+
+```swift CartUI/Sources/Navigation/CartNavigation.swift
+// ✅ Cart feature only needs these navigation methods
+public protocol CartNavigation: AnyObject {
+    func openCartDetail(id: UUID)
+}
+```
+
+The `Navigator` implements all of them:
+
+```swift iPhone/Navigation/Destination.swift
+extension Navigator: HomeNavigation, WishlistNavigation, CartNavigation {
+    // Implements all navigation protocols
+}
+```
+
+<Info>
+Features depend only on the navigation methods they actually use, not a giant navigation interface.
+</Info>
+
+### Focused data sources
+
+Each data source has a specific purpose:
+
+```swift User/Sources/Data/Auth/AuthClient.swift
+// ✅ Focused: only authentication
+public protocol AuthClient: Sendable {
+    func login(username: String, password: String) async -> Result<(User, AuthToken), AuthClientError>
+    func logout() async -> Result<Void, AuthClientError>
+}
+```
+
+```swift User/Sources/Data/Session/UserSession.swift
+// ✅ Focused: only session management
+@MainActor
+public protocol UserSession: AnyObject {
+    var user: User? { get }
+    var authToken: AuthToken? { get }
+    var isLoggedInPublisher: AnyPublisher<Bool, Never> { get }
+    func setUser(_ user: User, token: AuthToken)
+    func clear()
+}
+```
+
+## Dependency Inversion Principle (DIP)
+
+> Depend on abstractions, not concretions.
+
+This is the **foundation** of Clean Architecture and is applied throughout the entire codebase.
+
+### High-level modules depend on abstractions
+
+**Use cases depend on repository abstractions:**
+
+```swift User/Sources/Domain/UseCases/UserLoginUseCase.swift
+// ✅ Depends on abstraction (UserRepository protocol)
+public struct DefaultUserLoginUseCase: UserLoginUseCase {
+    let userRepository: UserRepository  // Protocol, not concrete class
+
+    public func execute(username: String, password: String) async -> Result<Void, LoginError> {
+        return await userRepository.login(username: username, password: password)
+    }
+}
+```
+
+**ViewModels depend on use case abstractions:**
+
+```swift LoginUI/Sources/UI/LoginScreen/LoginScreenViewModel.swift
+// ✅ Depends on abstraction (UserLoginUseCase protocol)
+@MainActor
+public final class LoginScreenViewModel: ObservableObject {
+    private let userLogin: UserLoginUseCase  // Protocol, not concrete struct
+
+    func login() async {
+        let result = await userLogin.execute(username: username, password: password)
+        // ...
+    }
+}
+```
+
+### Low-level modules implement abstractions
+
+**Repository implements domain protocol:**
+
+```swift User/Sources/Data/DefaultUserRepository.swift
+// ✅ Implements abstraction defined in Domain layer
+public final class DefaultUserRepository: UserRepository {
+    private let session: UserSession
+    private let authClient: AuthClient
+    
+    public func login(username: String, password: String) async -> Result<Void, LoginError> {
+        // Implementation details
+    }
+}
+```
+
+**Data sources implement protocols:**
+
+```swift User/Sources/Data/Session/UserSession.swift
+// ✅ Implements abstraction
+@MainActor
+public final class DefaultUserSession: UserSession {
+    public private(set) var user: User?
+    public private(set) var authToken: AuthToken?
+    // Implementation details
+}
+```
+
+### Dependency injection
+
+Concrete implementations are injected at the **composition root** (Application layer):
+
+```swift User/Sources/DI/UserDI.swift
+// ✅ Composition root creates concrete implementations
+public struct UserDI {
+    public let userLoginUseCase: UserLoginUseCase
+    public let userIsLoggedInUseCase: UserIsLoggedInUseCase
+    public let observeUserIsLoggedInUseCase: ObserveUserIsLoggedInUseCase
+
+    @MainActor
+    public init(
+        userSession: UserSession = DefaultUserSession(),  // Concrete default
+        authClient: AuthClient = FakeAuthClient()         // Concrete default
+    ) {
+        // Create concrete repository
+        let repository = DefaultUserRepository(session: userSession, authClient: authClient)
+        
+        // Create concrete use cases with repository abstraction
+        self.userLoginUseCase = DefaultUserLoginUseCase(userRepository: repository)
+        self.userIsLoggedInUseCase = DefaultUserIsLoggedInUseCase(userRepository: repository)
+        self.observeUserIsLoggedInUseCase = DefaultObserveUserIsLoggedInUseCase(userRepository: repository)
+    }
+}
+```
+
+```swift iPhone/Injector.swift
+// ✅ Top-level composition root
+@MainActor
+final class Injector {
+    static let shared = Injector()
+    
+    let userDI: UserDI
+    let loginUIDI: LoginUIDI
+
+    private init() {
+        // Create concrete domain DI
+        userDI = UserDI()
+        
+        // Inject into presentation DI
+        loginUIDI = LoginUIDI(userDI: userDI)
+    }
+}
+```
+
+<Note>
+**Inner layers** (Domain) define abstractions. **Outer layers** (Data, Presentation) provide implementations. **Application layer** wires everything together.
+</Note>
+
+### Abstraction ownership
+
+Abstractions are **owned by the client**, not the implementation:
+
+```
+Domain Layer (Client)
+├── UserRepository protocol      ← Owned by Domain
+└── UserLoginUseCase protocol    ← Owned by Domain
+
+Data Layer (Implementation)
+└── DefaultUserRepository        ← Implements Domain protocol
+
+Presentation Layer (Client)
+└── LoginScreenViewModel         ← Uses Domain protocol
+```
+
+This is why the `UserRepository` protocol lives in the **Domain** layer, not the Data layer.
+
+### Counter-example (violates DIP)
+
+```swift
+// ❌ ViewModel depends on concrete repository
+import UserData
+
+class LoginScreenViewModel {
+    private let repository = DefaultUserRepository(...)  // Concrete dependency
+    
+    func login() {
+        await repository.login(...)  // Tightly coupled to implementation
+    }
+}
+```
+
+This violates DIP because:
+1. High-level module (ViewModel) depends on low-level module (DefaultUserRepository)
+2. Cannot swap implementations without modifying ViewModel
+3. Difficult to test (can't inject mock)
+
+## How SOLID principles work together
+
+Let's see how all five principles work together in the login flow:
+
+### 1. Single Responsibility
+
+```swift
+// Each component has one responsibility
+UserLoginUseCase              → Validate and coordinate login
+DefaultUserRepository         → Manage user data access
+AuthClient                    → Handle authentication API
+UserSession                   → Manage session state
+LoginScreenViewModel          → Manage login screen state
+```
+
+### 2. Open/Closed
+
+```swift
+// Extend with new implementations without modifying protocols
+UserRepository protocol       → Closed for modification
+DefaultUserRepository         → Open for extension
+MockUserRepository            → Open for extension
+FakeUserRepository            → Open for extension
+```
+
+### 3. Liskov Substitution
+
+```swift
+// Any repository implementation works
+let useCase = DefaultUserLoginUseCase(userRepository: DefaultUserRepository())
+let useCase = DefaultUserLoginUseCase(userRepository: MockUserRepository())
+let useCase = DefaultUserLoginUseCase(userRepository: FakeUserRepository())
+```
+
+### 4. Interface Segregation
+
+```swift
+// Focused protocols
+UserLoginUseCase              → One method: execute
+UserIsLoggedInUseCase         → One method: execute
+ObserveUserIsLoggedInUseCase  → One method: execute
+```
+
+### 5. Dependency Inversion
+
+```swift
+// High-level depends on abstractions
+DefaultUserLoginUseCase       → Depends on UserRepository protocol
+LoginScreenViewModel          → Depends on UserLoginUseCase protocol
+
+// Low-level implements abstractions
+DefaultUserRepository         → Implements UserRepository
+DefaultUserLoginUseCase       → Implements UserLoginUseCase
+```
+
+## Testing with SOLID principles
+
+SOLID principles make testing straightforward:
+
+### Testing use cases
+
+```swift
+func testLoginWithEmptyUsername() async {
+    // LSP: MockUserRepository is substitutable for UserRepository
+    let mockRepository = MockUserRepository()
+    
+    // DIP: Use case depends on abstraction
+    let useCase = DefaultUserLoginUseCase(userRepository: mockRepository)
+    
+    // SRP: Test one responsibility
+    let result = await useCase.execute(username: "", password: "password")
+    
+    XCTAssertEqual(result, .failure(.usernameIsEmpty))
+}
+```
+
+### Testing ViewModels
+
+```swift
+func testLoginShowsError() async {
+    // ISP: Mock implements only what's needed
+    let mockUseCase = MockUserLoginUseCase()
+    mockUseCase.result = .failure(.invalidCredentials)
+    
+    // DIP: ViewModel depends on abstraction
+    let viewModel = LoginScreenViewModel(userLogin: mockUseCase)
+    
+    // SRP: Test one responsibility
+    await viewModel.login()
+    
+    XCTAssertEqual(viewModel.error, "Invalid username or password.")
+}
+```
+
+### Testing repositories
+
+```swift
+func testLoginUpdatesSession() async {
+    // OCP: Different implementations
+    let mockSession = MockUserSession()
+    let mockAuthClient = MockAuthClient()
+    
+    let repository = DefaultUserRepository(session: mockSession, authClient: mockAuthClient)
+    
+    _ = await repository.login(username: "test", password: "test")
+    
+    XCTAssertNotNil(mockSession.user)
+}
+```
+
+## Benefits of SOLID principles
+
+### Maintainability
+- Clear responsibilities make code easy to understand
+- Changes are isolated to specific components
+- Refactoring is safer and simpler
+
+### Testability
+- Small, focused interfaces are easy to mock
+- Dependencies are injected and substitutable
+- Each component can be tested in isolation
+
+### Flexibility
+- New implementations can be added without modification
+- Components can be swapped easily
+- Platform-specific implementations are straightforward
+
+### Scalability
+- Adding features follows established patterns
+- Code is reusable across features
+- Team members can work in parallel
+
+## Summary
+
+| Principle | Application | Benefit |
+|-----------|-------------|----------|
+| **Single Responsibility** | One class, one reason to change | Clear, focused components |
+| **Open/Closed** | Protocols enable extension | Add features without modifying existing code |
+| **Liskov Substitution** | Implementations are interchangeable | Easy mocking and testing |
+| **Interface Segregation** | Focused, minimal protocols | Clients depend only on what they need |
+| **Dependency Inversion** | Depend on abstractions | Flexible, testable architecture |
+
+<Info>
+SOLID principles aren't just theory—they're **practical guidelines** that make this Clean Architecture implementation maintainable, testable, and scalable.
+</Info>

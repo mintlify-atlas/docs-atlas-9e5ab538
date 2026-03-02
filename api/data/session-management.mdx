@@ -1,0 +1,211 @@
+---
+title: Session management
+description: UserSession protocol and DefaultUserSession for managing authenticated user state
+---
+
+## UserSession protocol
+
+The `UserSession` protocol defines the interface for managing authenticated user state.
+
+### Type signature
+
+```swift
+@MainActor
+public protocol UserSession: AnyObject
+```
+
+All `UserSession` implementations must be used on the main actor.
+
+### Properties
+
+#### user
+
+The currently authenticated user, or `nil` if not logged in.
+
+```swift
+var user: User? { get }
+```
+
+#### authToken
+
+The current authentication token, or `nil` if not logged in.
+
+```swift
+var authToken: AuthToken? { get }
+```
+
+#### isLoggedInPublisher
+
+A publisher that emits the current login state.
+
+```swift
+var isLoggedInPublisher: AnyPublisher<Bool, Never> { get }
+```
+
+### Methods
+
+#### setUser(_:token:)
+
+Stores the authenticated user and token.
+
+```swift
+func setUser(_ user: User, token: AuthToken)
+```
+
+<ParamField path="user" type="User" required>
+  The authenticated user to store
+</ParamField>
+
+<ParamField path="token" type="AuthToken" required>
+  The authentication token to store
+</ParamField>
+
+#### clear()
+
+Clears the current session, removing user and token.
+
+```swift
+func clear()
+```
+
+## DefaultUserSession
+
+The default implementation of `UserSession` with automatic token expiry.
+
+### Type signature
+
+```swift
+@MainActor
+public final class DefaultUserSession: UserSession
+```
+
+### Initializer
+
+```swift
+public init()
+```
+
+Creates a new session instance in a logged-out state.
+
+### Properties
+
+#### user
+
+The currently authenticated user.
+
+```swift
+public private(set) var user: User?
+```
+
+#### authToken
+
+The current authentication token.
+
+```swift
+public private(set) var authToken: AuthToken?
+```
+
+#### isLoggedInPublisher
+
+Publishes `true` when a user is logged in, `false` otherwise.
+
+```swift
+public var isLoggedInPublisher: AnyPublisher<Bool, Never>
+```
+
+### Methods
+
+#### setUser(_:token:)
+
+Stores the user and token, publishes logged-in state, and schedules automatic expiry.
+
+```swift
+public func setUser(_ user: User, token: AuthToken)
+```
+
+<ParamField path="user" type="User" required>
+  The authenticated user
+</ParamField>
+
+<ParamField path="token" type="AuthToken" required>
+  The authentication token
+</ParamField>
+
+**Behavior:**
+- Stores the user and token
+- Publishes `true` to `isLoggedInPublisher`
+- Schedules automatic session clear when token expires
+- Cancels any existing expiry timer
+- If token is already expired, immediately clears the session
+
+#### clear()
+
+Clears the session and cancels any pending expiry timer.
+
+```swift
+public func clear()
+```
+
+**Behavior:**
+- Sets `user` and `authToken` to `nil`
+- Publishes `false` to `isLoggedInPublisher`
+- Cancels the expiry timer
+
+## Automatic expiry
+
+`DefaultUserSession` automatically monitors token expiration and clears the session when the token expires. This is implemented using a `DispatchSourceTimer` that fires at the token's `expiresAt` date.
+
+## Usage example
+
+```swift
+import Combine
+import User
+
+@MainActor
+func setupSession() {
+    let session = DefaultUserSession()
+    var cancellables = Set<AnyCancellable>()
+    
+    // Subscribe to login state changes
+    session.isLoggedInPublisher
+        .sink { isLoggedIn in
+            if isLoggedIn {
+                print("User logged in: \(session.user?.username ?? "")")
+            } else {
+                print("User logged out")
+            }
+        }
+        .store(in: &cancellables)
+    
+    // Simulate login
+    let user = User(id: UUID(), username: "john.doe")
+    let token = AuthToken(
+        value: "abc123",
+        expiresAt: Date().addingTimeInterval(3600) // 1 hour
+    )
+    
+    session.setUser(user, token: token)
+    
+    // Access current session data
+    if let currentUser = session.user,
+       let currentToken = session.authToken {
+        print("Logged in as: \(currentUser.username)")
+        print("Token expires at: \(currentToken.expiresAt)")
+    }
+    
+    // Manually logout
+    session.clear()
+}
+```
+
+## Thread safety
+
+Both `UserSession` and `DefaultUserSession` are marked with `@MainActor`, ensuring all operations occur on the main thread. This provides thread safety for UI-related code and eliminates the need for manual synchronization.
+
+```swift
+// Must be called from main actor context
+Task { @MainActor in
+    let session = DefaultUserSession()
+    session.setUser(user, token: token)
+}
+```

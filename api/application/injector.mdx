@@ -1,0 +1,198 @@
+---
+title: Injector
+description: The composition root that wires all dependencies together for the application
+---
+
+The `Injector` class is the **composition root** of the application. It's responsible for creating and wiring together all dependencies across all layers (domain, data, presentation, and application).
+
+## Overview
+
+The Injector follows the singleton pattern and is marked with `@MainActor` to ensure all UI-related dependencies are created on the main thread. It creates dependencies in the correct order, respecting the dependency graph.
+
+## Declaration
+
+```swift iPhone/Injector.swift
+@MainActor
+final class Injector {
+    static let shared = Injector()
+    
+    // MARK: - Components
+    let userDI: UserDI
+
+    // MARK: - Feature Navigation
+    let navigator: Navigator
+    
+    // MARK: - UIDI Properties
+    let loginUIDI: LoginUIDI
+    let homeUIDI: HomeUIDI
+    let wishlistUIDI: WishlistUIDI
+    let cartUIDI: CartUIDI
+
+    private init() {
+        // Initialize dependencies in order
+    }
+}
+```
+
+## Properties
+
+<ParamField path="shared" type="Injector">
+  Singleton instance of the Injector. Access all dependencies through this shared instance.
+</ParamField>
+
+<ParamField path="userDI" type="UserDI">
+  Domain DI container for the User module. Provides use cases for authentication and user management.
+</ParamField>
+
+<ParamField path="navigator" type="Navigator">
+  Central navigation coordinator that manages tab selection and navigation paths for all features.
+</ParamField>
+
+<ParamField path="loginUIDI" type="LoginUIDI">
+  UI DI container for the Login feature. Creates login-related views and view models.
+</ParamField>
+
+<ParamField path="homeUIDI" type="HomeUIDI">
+  UI DI container for the Home feature. Creates home-related views and view models.
+</ParamField>
+
+<ParamField path="wishlistUIDI" type="WishlistUIDI">
+  UI DI container for the Wishlist feature. Creates wishlist-related views and view models.
+</ParamField>
+
+<ParamField path="cartUIDI" type="CartUIDI">
+  UI DI container for the Cart feature. Creates cart-related views and view models.
+</ParamField>
+
+## Initialization order
+
+The Injector creates dependencies in a specific order to ensure proper dependency resolution:
+
+```swift
+private init() {
+    // 1. Navigation (no dependencies)
+    navigator = Navigator()
+    
+    // 2. User Component DI (no dependencies)
+    userDI = UserDI()
+
+    // 3. UI Features (depend on userDI or navigator)
+    loginUIDI = LoginUIDI(userDI: userDI)
+    homeUIDI = HomeUIDI(navigation: navigator)
+    wishlistUIDI = WishlistUIDI(navigation: navigator)
+    cartUIDI = CartUIDI(navigation: navigator)
+}
+```
+
+<Steps>
+  <Step title="Create Navigator">
+    The Navigator is created first since it has no dependencies and is needed by UI features.
+  </Step>
+  
+  <Step title="Create domain DI containers">
+    Domain DI containers like `UserDI` are created next. They have no dependencies on presentation or application layers.
+  </Step>
+  
+  <Step title="Create UI DI containers">
+    UI DI containers are created last, injecting either domain containers (like `UserDI`) or navigation dependencies (like `Navigator`).
+  </Step>
+</Steps>
+
+## Usage
+
+Access dependencies through the singleton instance:
+
+```swift
+// Access from anywhere in the app
+let injector = Injector.shared
+
+// Get a login view
+let loginView = injector.loginUIDI.loginView()
+
+// Access use cases
+let loginUseCase = injector.userDI.userLoginUseCase
+
+// Navigate using the navigator
+injector.navigator.push(Destination.homeDetail(id: someId))
+```
+
+## Dependency patterns
+
+<CardGroup cols={2}>
+  <Card title="Domain-based features" icon="cube">
+    Features like Login receive domain DI containers (`userDI`) to access use cases.
+  </Card>
+  
+  <Card title="Navigation-based features" icon="route">
+    Features like Home receive the navigator to handle routing and cross-feature navigation.
+  </Card>
+</CardGroup>
+
+### Domain-based feature example
+
+```swift
+// LoginUIDI receives domain dependencies
+loginUIDI = LoginUIDI(userDI: userDI)
+```
+
+The Login feature needs access to authentication use cases, so it receives the entire `UserDI` container.
+
+### Navigation-based feature example
+
+```swift
+// HomeUIDI receives navigation dependencies
+homeUIDI = HomeUIDI(navigation: navigator)
+```
+
+The Home feature needs to navigate to details or other tabs, so it receives the `Navigator` instance.
+
+## Testing
+
+For testing, you can create a custom injector with mock dependencies:
+
+```swift
+@MainActor
+final class MockInjector {
+    let userDI: UserDI
+    let navigator: Navigator
+    let loginUIDI: LoginUIDI
+    
+    init(userDI: UserDI = MockUserDI()) {
+        self.navigator = Navigator()
+        self.userDI = userDI
+        self.loginUIDI = LoginUIDI(userDI: userDI)
+    }
+}
+
+// Use in tests
+let mockInjector = MockInjector(userDI: mockUserDI)
+let loginView = mockInjector.loginUIDI.loginView()
+```
+
+<Note>
+  The private initializer prevents creating multiple instances. In tests, create a separate test injector class instead of trying to instantiate the production Injector.
+</Note>
+
+## Architecture benefits
+
+<Accordion title="Single responsibility">
+  The Injector has one job: create and wire dependencies. It doesn't contain business logic or UI code.
+</Accordion>
+
+<Accordion title="Centralized configuration">
+  All dependency creation happens in one place, making it easy to understand the app's dependency graph.
+</Accordion>
+
+<Accordion title="Easy testing">
+  By creating a test injector with mock dependencies, you can test the entire app composition without touching production code.
+</Accordion>
+
+<Accordion title="Compile-time safety">
+  Dependency resolution happens at compile time. Missing dependencies cause build errors, not runtime crashes.
+</Accordion>
+
+## See also
+
+- [UserDI](/api/application/injector) - Domain DI container example
+- [Navigator](/api/application/navigator) - Navigation coordinator
+- [Feature DI containers](/api/presentation/feature-di) - UI DI containers

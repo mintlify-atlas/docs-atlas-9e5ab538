@@ -1,0 +1,487 @@
+---
+title: The dependency rule
+description: Understanding and enforcing the dependency rule in Clean Architecture
+---
+
+## What is the dependency rule?
+
+The dependency rule is the **fundamental principle** of Clean Architecture:
+
+<Note>
+**Dependencies point inward.** Outer layers depend on inner layers, never the reverse.
+</Note>
+
+This means:
+- The **Domain layer** has no dependencies on any other layer
+- The **Data layer** depends on the Domain layer
+- The **Presentation layer** depends on the Domain layer
+- The **Application layer** depends on all layers
+
+## Dependency diagram
+
+```
+┌──────────────────────────────────┐
+│     Application Layer            │  ← Depends on all layers
+│                                  │
+│  ┌────────────────────────────┐  │
+│  │   Presentation Layer       │  │  ← Depends on Domain
+│  │                            │  │
+│  │  ┌──────────────────────┐  │  │
+│  │  │   Data Layer         │  │  │  ← Depends on Domain
+│  │  │                      │  │  │
+│  │  │  ┌────────────────┐  │  │  │
+│  │  │  │ Domain Layer   │  │  │  │  ← No dependencies
+│  │  │  │  (Core Logic)  │  │  │  │
+│  │  │  └────────────────┘  │  │  │
+│  │  │                      │  │  │
+│  │  └──────────────────────┘  │  │
+│  │                            │  │
+│  └────────────────────────────┘  │
+│                                  │
+└──────────────────────────────────┘
+```
+
+## Why the dependency rule matters
+
+### 1. Stable core
+
+The domain layer is the most stable part of the system because it has zero dependencies. Changes to:
+- UI frameworks (SwiftUI → UIKit)
+- Databases (CoreData → Realm)
+- API clients (URLSession → Alamofire)
+
+...do **not** affect the domain layer.
+
+### 2. Framework independence
+
+Business logic has no knowledge of:
+- SwiftUI or UIKit
+- CoreData or Realm
+- URLSession or Alamofire
+- Any other framework
+
+This means the domain can be:
+- Tested without any frameworks
+- Reused across iOS, macOS, watchOS, tvOS
+- Extracted into a separate package
+
+### 3. Testability
+
+Each layer can be tested in isolation:
+- **Domain**: Test with mock repositories (no real data)
+- **Data**: Test with mock data sources (no real API calls)
+- **Presentation**: Test with mock use cases (no real business logic)
+
+### 4. Flexibility
+
+You can swap implementations without affecting other layers:
+- Replace fake API client with real one
+- Switch from in-memory storage to CoreData
+- Change from REST API to GraphQL
+
+## Enforcing the dependency rule
+
+### Module dependencies
+
+Swift Package Manager modules enforce dependencies at compile time:
+
+```swift User/Package.swift
+let package = Package(
+    name: "User",
+    products: [
+        .library(name: "User", targets: ["User"]),
+        .library(name: "UserData", targets: ["UserData"]),
+        .library(name: "UserDI", targets: ["UserDI"])
+    ],
+    targets: [
+        // Domain layer - NO dependencies
+        .target(
+            name: "User",
+            dependencies: []
+        ),
+        // Data layer - depends on Domain only
+        .target(
+            name: "UserData",
+            dependencies: ["User"]
+        ),
+        // DI - depends on Domain and Data
+        .target(
+            name: "UserDI",
+            dependencies: ["User", "UserData"]
+        )
+    ]
+)
+```
+
+<Info>
+If you try to import an outer layer from an inner layer, you'll get a **compile-time error**.
+</Info>
+
+### Dependency inversion principle
+
+The dependency rule is enforced through **dependency inversion**:
+
+1. Inner layers define **protocols** (abstractions)
+2. Outer layers provide **implementations** (concretions)
+3. Inner layers depend on abstractions, not concretions
+
+## Practical examples
+
+### Example 1: Domain → Data dependency
+
+**Wrong (violates dependency rule):**
+
+```swift
+// ❌ Domain layer importing Data layer
+import UserData
+
+public protocol UserLoginUseCase {
+    func execute(username: String, password: String) async -> Result<Void, AuthClientError>
+    //                                                                          ↑
+    //                                                     Data layer type leaking into Domain
+}
+```
+
+**Correct:**
+
+```swift User/Sources/Domain/UseCases/UserLoginUseCase.swift
+// ✅ Domain layer defines its own error type
+public enum LoginError: Error {
+    case invalidCredentials
+    case usernameIsEmpty
+    case passwordIsEmpty
+    case unknown
+}
+
+public protocol UserLoginUseCase {
+    func execute(username: String, password: String) async -> Result<Void, LoginError>
+    //                                                                          ↑
+    //                                                           Domain error type
+}
+```
+
+The Data layer maps its errors to domain errors:
+
+```swift User/Sources/Data/DefaultUserRepository.swift
+private func mapAuthClientErrorToLoginError(_ error: AuthClientError) -> LoginError {
+    switch error {
+    case .invalidCredentials:
+        return .invalidCredentials
+    case .networkFailure, .unknown:
+        return .unknown
+    }
+}
+```
+
+### Example 2: Presentation → Data dependency
+
+**Wrong (violates dependency rule):**
+
+```swift
+// ❌ ViewModel importing Data layer
+import UserData
+
+class LoginScreenViewModel: ObservableObject {
+    private let repository: DefaultUserRepository  // Concrete implementation
+    
+    func login() async {
+        await repository.login(...)  // Direct dependency on Data layer
+    }
+}
+```
+
+**Correct:**
+
+```swift LoginUI/Sources/UI/LoginScreen/LoginScreenViewModel.swift
+// ✅ ViewModel depends on Domain layer protocol
+import User  // Domain layer only
+
+@MainActor
+public final class LoginScreenViewModel: ObservableObject {
+    private let userLogin: UserLoginUseCase  // Protocol from Domain
+
+    func login() async {
+        let result = await userLogin.execute(username: username, password: password)
+        // ...
+    }
+}
+```
+
+The Application layer injects the concrete implementation:
+
+```swift LoginUI/Sources/DI/LoginUIDI.swift
+public struct LoginUIDI {
+    private let userDI: UserDI
+
+    @MainActor
+    public func makeLoginScreenViewModel() -> LoginScreenViewModel {
+        LoginScreenViewModel(userLogin: userDI.userLoginUseCase)
+        //                                     ↑
+        //                      Concrete implementation injected here
+    }
+}
+```
+
+### Example 3: Domain → Presentation dependency
+
+**Wrong (violates dependency rule):**
+
+```swift
+// ❌ Use case importing SwiftUI
+import SwiftUI
+
+public protocol UserLoginUseCase {
+    func execute(username: String, password: String) async -> Result<Void, LoginError>
+    func showLoginAlert() -> Alert  // SwiftUI type in Domain!
+}
+```
+
+**Correct:**
+
+```swift User/Sources/Domain/UseCases/UserLoginUseCase.swift
+// ✅ Use case has no UI dependencies
+public protocol UserLoginUseCase {
+    func execute(username: String, password: String) async -> Result<Void, LoginError>
+}
+```
+
+The Presentation layer handles UI concerns:
+
+```swift LoginUI/Sources/UI/LoginScreen/LoginScreenViewModel.swift
+@MainActor
+public final class LoginScreenViewModel: ObservableObject {
+    @Published var error: String?
+
+    func login() async {
+        let result = await userLogin.execute(username: username, password: password)
+        switch result {
+        case .success:
+            break
+        case .failure(let loginError):
+            self.error = mapLoginErrorToMessage(loginError)  // Map to user-friendly message
+        }
+    }
+}
+```
+
+## Dependency flow in action
+
+Let's trace a login request through the layers:
+
+### 1. User action (Presentation layer)
+
+```swift LoginUI/Sources/UI/LoginScreen/LoginScreenView.swift
+Button("Login") {
+    Task { await viewModel.login() }
+}
+```
+
+### 2. ViewModel coordinates (Presentation layer)
+
+```swift LoginUI/Sources/UI/LoginScreen/LoginScreenViewModel.swift
+func login() async {
+    // Depends on Domain layer protocol
+    let result = await userLogin.execute(username: username, password: password)
+}
+```
+
+### 3. Use case validates (Domain layer)
+
+```swift User/Sources/Domain/UseCases/UserLoginUseCase.swift
+public func execute(username: String, password: String) async -> Result<Void, LoginError> {
+    if username.isEmpty {
+        return .failure(.usernameIsEmpty)
+    }
+    if password.isEmpty {
+        return .failure(.passwordIsEmpty)
+    }
+    
+    // Depends on Domain layer protocol
+    return await userRepository.login(username: username, password: password)
+}
+```
+
+### 4. Repository fetches data (Data layer)
+
+```swift User/Sources/Data/DefaultUserRepository.swift
+public func login(username: String, password: String) async -> Result<Void, LoginError> {
+    let result = await authClient.login(username: username, password: password)
+    switch result {
+    case let .success((user, token)):
+        session.setUser(user, token: token)
+        return .success(())
+    case .failure(let error):
+        // Maps Data layer error to Domain layer error
+        return .failure(mapAuthClientErrorToLoginError(error))
+    }
+}
+```
+
+### 5. Application wires dependencies (Application layer)
+
+```swift iPhone/Injector.swift
+private init() {
+    userDI = UserDI()  // Creates data sources, repositories, use cases
+    loginUIDI = LoginUIDI(userDI: userDI)  // Injects domain container into UI
+}
+```
+
+```swift User/Sources/DI/UserDI.swift
+public init() {
+    self.userSession = DefaultUserSession()
+    self.authClient = FakeAuthClient()
+    
+    let repository = DefaultUserRepository(session: userSession, authClient: authClient)
+    self.userRepository = repository
+    
+    self.userLoginUseCase = DefaultUserLoginUseCase(userRepository: repository)
+}
+```
+
+<Info>
+Notice how dependencies flow **inward**: Presentation → Domain ← Data, with the Application layer at the outermost edge coordinating everything.
+</Info>
+
+## Common violations and fixes
+
+### Violation 1: Direct data access from ViewModels
+
+**Problem:**
+```swift
+// ❌ ViewModel directly accessing repository
+class LoginViewModel {
+    func login() {
+        let result = await UserRepository().login(...)
+    }
+}
+```
+
+**Solution:**
+```swift
+// ✅ ViewModel depends on use case protocol
+class LoginViewModel {
+    private let loginUseCase: UserLoginUseCase
+    
+    func login() {
+        let result = await loginUseCase.execute(...)
+    }
+}
+```
+
+### Violation 2: Domain layer importing UI frameworks
+
+**Problem:**
+```swift
+// ❌ Use case importing SwiftUI
+import SwiftUI
+
+struct UserLoginUseCase {
+    func execute() -> some View { ... }
+}
+```
+
+**Solution:**
+```swift
+// ✅ Use case has no UI dependencies
+struct DefaultUserLoginUseCase: UserLoginUseCase {
+    func execute() async -> Result<Void, LoginError> { ... }
+}
+```
+
+### Violation 3: Repository importing ViewModels
+
+**Problem:**
+```swift
+// ❌ Repository importing Presentation layer
+import LoginUI
+
+class UserRepository {
+    func notifyViewModel(_ viewModel: LoginViewModel) { ... }
+}
+```
+
+**Solution:**
+```swift
+// ✅ Repository publishes events; ViewModels observe
+class DefaultUserRepository: UserRepository {
+    var loggedInPublisher: AnyPublisher<Bool, Never> {
+        session.isLoggedInPublisher
+    }
+}
+```
+
+## Benefits of following the dependency rule
+
+### 1. Isolated testing
+
+**Domain layer:**
+```swift
+func testLoginValidation() {
+    let mockRepository = MockUserRepository()
+    let useCase = DefaultUserLoginUseCase(userRepository: mockRepository)
+    
+    let result = await useCase.execute(username: "", password: "test")
+    
+    XCTAssertEqual(result, .failure(.usernameIsEmpty))
+}
+```
+
+**Presentation layer:**
+```swift
+func testLoginError() {
+    let mockUseCase = MockUserLoginUseCase()
+    let viewModel = LoginScreenViewModel(userLogin: mockUseCase)
+    
+    await viewModel.login()
+    
+    XCTAssertEqual(viewModel.error, "Username is required.")
+}
+```
+
+### 2. Reusable domain logic
+
+The domain layer can be:
+- Shared across iOS, macOS, watchOS apps
+- Used in command-line tools
+- Extracted into a separate Swift package
+
+### 3. Parallel development
+
+Teams can work on different layers simultaneously:
+- Backend team defines use cases and repository contracts
+- Frontend team builds UI with mock use cases
+- Infrastructure team implements repositories
+
+### 4. Easy refactoring
+
+Change implementations without affecting other layers:
+- Swap URLSession for Alamofire
+- Replace in-memory cache with CoreData
+- Switch from REST to GraphQL
+
+## Checklist
+
+Use this checklist to verify the dependency rule:
+
+- [ ] Domain layer imports only Foundation and Combine
+- [ ] Data layer imports only Domain layer and external SDKs
+- [ ] Presentation layer imports only Domain layer and UI frameworks
+- [ ] Application layer wires concrete implementations
+- [ ] No layer imports layers at the same level or outer layers
+- [ ] All dependencies are injected via initializers
+- [ ] Inner layers define protocols, outer layers provide implementations
+
+<Warning>
+If you find yourself importing an outer layer from an inner layer, **stop**. You're violating the dependency rule. Use dependency inversion instead.
+</Warning>
+
+## Summary
+
+The dependency rule ensures:
+
+1. **Stable domain**: Business logic is independent of frameworks
+2. **Testable code**: Each layer can be tested in isolation
+3. **Flexible architecture**: Swap implementations without affecting other layers
+4. **Clear boundaries**: Dependencies flow in one direction only
+
+By following the dependency rule, you create a maintainable, testable, and scalable architecture that can evolve with your application's needs.
